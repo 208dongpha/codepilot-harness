@@ -125,6 +125,7 @@ class Workspace:
         paths: list[str] = []
         pending = [base]
         entries = 0
+        depth_truncated = False
         deadline = time.monotonic() + self.config.timeout_seconds
         while pending:
             folder = pending.pop()
@@ -148,6 +149,9 @@ class Workspace:
                             continue
                         relative = child.relative_to(self.root).as_posix()
                         if stat.S_ISDIR(info.st_mode):
+                            if len(child.relative_to(self.root).parts) >= self.config.max_depth:
+                                depth_truncated = True
+                                continue
                             pending.append(child)
                         elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
                             self.resolve(relative)
@@ -160,7 +164,7 @@ class Workspace:
                 raise ToolError("PERMISSION_DENIED") from None
             except OSError:
                 raise ToolError("READ_ERROR") from None
-        return FileListing(sorted(paths))
+        return FileListing(sorted(paths), depth_truncated)
 
     def read_text(self, relative: str) -> str:
         path = self.resolve(relative)

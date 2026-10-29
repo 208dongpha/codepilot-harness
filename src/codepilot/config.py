@@ -56,6 +56,7 @@ class RepositoryConfig(Section):
     workspace: Path = Path(".")
     max_file_bytes: int = Field(default=131072, ge=1, le=1048576)
     max_files: int = Field(default=1000, ge=1, le=10000)
+    max_depth: int = Field(default=20, ge=1, le=64)
     max_scan_entries: int = Field(default=10000, ge=1, le=100000)
     max_total_bytes: int = Field(default=4194304, ge=1, le=67108864)
     max_output_chars: int = Field(default=32000, ge=256, le=128000)
