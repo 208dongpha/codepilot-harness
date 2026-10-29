@@ -21,6 +21,7 @@ class SourceExcerpt(BaseModel):
     end_line: int
     content: str
     truncated: bool = False
+    partial_line: bool = False
 
 
 class RepositoryContext(BaseModel):
@@ -133,13 +134,30 @@ class ContextBuilder:
                 truncated=start > 1 or end < len(lines),
             )
             context.sources.append(source)
-            while source.content and len(context.model_dump_json()) > budget:
-                source.content = source.content[: len(source.content) // 2]
-                source.end_line = start + max(
-                    0, source.content.count("\n") - int(source.content.endswith("\n"))
-                )
+            while len(context.model_dump_json()) > budget and start < end:
+                # Drop the farthest boundary, retaining the reference line.
+                if focus_line - start >= end - focus_line:
+                    start += 1
+                else:
+                    end -= 1
+                source.start_line, source.end_line = start, end
+                source.content = "\n".join(lines[start - 1 : end])
                 source.truncated = True
                 context.truncated = True
+            if len(context.model_dump_json()) > budget:
+                source.partial_line = True
+                source.truncated = True
+                context.truncated = True
+                original = source.content
+                low, high = 0, len(original)
+                while low < high:
+                    middle = (low + high + 1) // 2
+                    source.content = original[:middle]
+                    if len(context.model_dump_json()) <= budget:
+                        low = middle
+                    else:
+                        high = middle - 1
+                source.content = original[:low]
             if not source.content or len(context.model_dump_json()) > budget:
                 context.sources.pop()
                 context.truncated = True

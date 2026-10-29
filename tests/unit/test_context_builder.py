@@ -108,3 +108,34 @@ def test_context_source_count_limit(workspace):
     mapping = RepositoryMapper(workspace).build()
     result = ContextBuilder(workspace).build("auth other", mapping)
     assert len(result.sources) == 1 and result.truncated
+
+
+@pytest.mark.parametrize("budget", [900, 1200])
+@pytest.mark.parametrize("unicode", [False, True])
+def test_budget_keeps_later_focus_and_exact_line_slice(workspace, budget, unicode):
+    lines = [f"# {'nội dung' if unicode else 'content'} {i} " + "x" * 60 for i in range(70)]
+    lines[45] = "# focus-marker"
+    (workspace.root / "later.txt").write_text("\n".join(lines), encoding="utf-8")
+    workspace.config.max_context_chars = budget
+    result = ContextBuilder(workspace).build(
+        "Explain later.txt", RepositoryMap(), [{"path": "later.txt", "line": 46}]
+    )
+    assert result.sources
+    source = result.sources[0]
+    assert source.start_line <= 46 <= source.end_line
+    assert source.content == "\n".join(lines[source.start_line - 1 : source.end_line])
+    assert not source.partial_line
+    assert len(result.to_message()["content"]) <= budget
+
+
+def test_single_oversized_unicode_line_is_explicitly_partial(workspace):
+    line = "Tiếng Việt 😀 " * 500
+    (workspace.root / "long.txt").write_text(line, encoding="utf-8")
+    workspace.config.max_context_chars = 1000
+    result = ContextBuilder(workspace).build("long.txt", RepositoryMap())
+    assert result.sources
+    source = result.sources[0]
+    assert source.partial_line and source.truncated
+    assert source.start_line == source.end_line == 1
+    assert source.content and line.startswith(source.content)
+    assert len(result.to_message()["content"]) <= 1000
