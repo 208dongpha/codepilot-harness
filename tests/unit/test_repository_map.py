@@ -67,3 +67,24 @@ def test_supplied_paths_rechecked(workspace, tmp_path):
     result = RepositoryMapper(workspace).build(["../outside.py", ".env.py", "pkg/auth.py"])
     assert [m.path for m in result.modules] == ["pkg/auth.py"]
     assert result.skipped == 2
+
+
+def test_supplied_path_length_and_small_budget_are_bounded(workspace):
+    from pydantic import ValidationError
+
+    from codepilot.context.repository_map import ModuleEntry
+    from codepilot.tools.base import ToolError
+
+    with pytest.raises(ValidationError):
+        ModuleEntry(path="x" * 513, package=False)
+    with pytest.raises(ToolError, match="MAP_BUDGET_TOO_SMALL"):
+        RepositoryMapper(workspace).build(max_chars=1)
+
+
+def test_ast_walk_stops_at_deadline(workspace):
+    from unittest.mock import patch
+
+    with patch("codepilot.context.repository_map.time.monotonic", side_effect=[0, 0, 10]):
+        result = RepositoryMapper(workspace).build(["pkg/auth.py"])
+    assert result.truncated
+    assert not result.modules[0].symbols

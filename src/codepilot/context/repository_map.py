@@ -15,7 +15,7 @@ class Symbol(BaseModel):
 
 
 class ModuleEntry(BaseModel):
-    path: str
+    path: str = Field(min_length=1, max_length=512)
     package: bool
     symbols: list[Symbol] = Field(default_factory=list)
 
@@ -34,6 +34,8 @@ class RepositoryMapper:
     def build(self, paths: list[str] | None = None, max_chars: int | None = None) -> RepositoryMap:
         settings = self.workspace.config
         budget = min(max_chars or settings.max_map_chars, settings.max_map_chars)
+        if budget < 128:
+            raise ToolError("MAP_BUDGET_TOO_SMALL")
         result = RepositoryMap()
         if paths is None:
             listing = self.workspace.list_files()
@@ -71,6 +73,9 @@ class RepositoryMapper:
             entry = ModuleEntry(path=normalized, package=normalized.endswith("__init__.py"))
             pending = [(tree, "")]
             while pending:
+                if time.monotonic() >= deadline:
+                    result.truncated = True
+                    break
                 node, scope = pending.pop()
                 if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
                     name = f"{scope}.{node.name}" if scope else node.name
