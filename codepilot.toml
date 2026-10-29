@@ -18,3 +18,12 @@ timeout_seconds = 60
 
 [logging]
 level = "INFO"
+
+[repository]
+workspace = "."
+max_file_bytes = 131072
+max_files = 1000
+max_output_chars = 32000
+max_map_chars = 16000
+max_context_chars = 32000
+timeout_seconds = 5

@@ -52,6 +52,21 @@ class SandboxConfig(Section):
     timeout_seconds: int = Field(default=60, gt=0)
 
 
+class RepositoryConfig(Section):
+    workspace: Path = Path(".")
+    max_file_bytes: int = Field(default=131072, ge=1, le=1048576)
+    max_files: int = Field(default=1000, ge=1, le=10000)
+    max_scan_entries: int = Field(default=10000, ge=1, le=100000)
+    max_total_bytes: int = Field(default=4194304, ge=1, le=67108864)
+    max_output_chars: int = Field(default=32000, ge=256, le=128000)
+    max_map_chars: int = Field(default=16000, ge=256, le=64000)
+    max_context_chars: int = Field(default=32000, ge=512, le=256000)
+    max_context_files: int = Field(default=8, ge=1, le=20)
+    max_symbols: int = Field(default=2000, ge=1, le=5000)
+    max_search_results: int = Field(default=100, ge=1, le=1000)
+    timeout_seconds: float = Field(default=5, gt=0, le=30)
+
+
 class LoggingConfig(Section):
     level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
@@ -62,6 +77,7 @@ class Config(Section):
     permissions: PermissionsConfig = Field(default_factory=PermissionsConfig)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    repository: RepositoryConfig = Field(default_factory=RepositoryConfig)
     api_key: SecretStr | None = Field(default=None, exclude=True, repr=False)
 
 
@@ -77,6 +93,7 @@ def load_config(path: Path = Path("codepilot.toml")) -> Config:
             ("permissions", PermissionsConfig),
             ("sandbox", SandboxConfig),
             ("logging", LoggingConfig),
+            ("repository", RepositoryConfig),
         ):
             for field in model.model_fields:
                 name = f"CODEPILOT_{section}_{field}".upper()
