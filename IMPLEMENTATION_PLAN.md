@@ -1,7 +1,7 @@
 
 # CODEPILOT HARNESS — KẾ HOẠCH TRIỂN KHAI
 
-> **Trạng thái:** Phase 1 APPROVED; Phase 2 AUTHORIZED
+> **Trạng thái:** Phase 1 APPROVED; Phase 2 đã triển khai, chờ review
 > **Phase được phép triển khai:** Phase 2 (CP-007 đến CP-011)
 > **Kiến trúc:** Modular Monolith
 > **Thời gian dự kiến:** 8 tuần
@@ -1753,7 +1753,7 @@ KHÔNG ĐƯỢC TỰ ĐỘNG BẮT ĐẦU PHASE 2.
 | Phase | Trạng thái |
 |---|---|
 | Phase 1 | APPROVED (code review) |
-| Phase 2 | AUTHORIZED — đang triển khai, chờ review |
+| Phase 2 | AUTHORIZED — đã triển khai CP-007–CP-011, chờ review |
 | Phase 3 | LOCKED |
 | Phase 4 | LOCKED |
 | Phase 5 | LOCKED |
