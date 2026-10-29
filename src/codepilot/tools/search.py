@@ -39,6 +39,7 @@ class SearchTool:
             "--engine=default",
             "--encoding=utf-8",
             "--line-number",
+            "--column",
             "--no-heading",
             "--color=never",
             f"--max-count={limit}",
@@ -98,11 +99,22 @@ class SearchTool:
             output = self._run(
                 executable, text, args, cap - len(matches), deadline - time.monotonic()
             )
-            for line in output.splitlines():
-                number, separator, content = line.partition(":")
-                if not separator or not number.isdigit():
+            for line in output.split("\n"):
+                if not line:
+                    continue
+                number, separator, remainder = line.partition(":")
+                column, column_separator, content = remainder.partition(":")
+                if (
+                    not separator
+                    or not column_separator
+                    or not number.isdigit()
+                    or not column.isdigit()
+                ):
                     raise ToolError("SEARCH_ERROR")
-                snippet = content[:512]
+                prefix = content.encode("utf-8")[: max(0, int(column) - 1)]
+                offset = len(prefix.decode("utf-8", errors="ignore"))
+                start = max(0, offset - 80)
+                snippet = content[start : start + 512]
                 cost = len(path) * 2 + len(snippet) * 2 + 100
                 if output_chars + cost > self.workspace.config.max_output_chars // 2:
                     return {"matches": matches, "truncated": True, "skipped": skipped}

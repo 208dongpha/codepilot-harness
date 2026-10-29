@@ -54,3 +54,24 @@ def test_rg_never_follows_repository_symlink(repo, tmp_path):
     except OSError:
         pytest.skip("Symlink creation not permitted")
     assert tools.call("search_code", {"query": "outside-marker"}).data["matches"] == []
+
+
+def test_unicode_line_content_keeps_rg_line_numbers(repo):
+    root, tools = repo
+    (root / "unicode.txt").write_text("first\u2028needle\nsecond", encoding="utf-8")
+    result = tools.call("search_code", {"query": "needle"})
+    assert result.ok
+    assert result.data["matches"][0] == {
+        "path": "unicode.txt",
+        "line": 1,
+        "content": "first\u2028needle",
+    }
+
+
+def test_long_line_excerpt_contains_the_match(repo):
+    root, tools = repo
+    (root / "longline.py").write_text("a" * 600 + "needle" + "b" * 50)
+    result = tools.call("search_code", {"query": "needle"})
+    assert result.ok and "needle" in result.data["matches"][0]["content"]
+    assert result.data["matches"][0]["line"] == 1
+    assert result.data["truncated"]
