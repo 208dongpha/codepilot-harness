@@ -1,0 +1,10 @@
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.db
+*.sqlite
+*.sqlite3
+dist/
+api_key.md
