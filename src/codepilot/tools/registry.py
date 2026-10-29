@@ -1,6 +1,10 @@
+import logging
+
 from pydantic import ValidationError
 
 from codepilot.tools.base import ReadOnlyTool, ToolError, ToolResult
+
+logger = logging.getLogger("codepilot")
 
 READ_ONLY_NAMES = frozenset({"list_files", "read_file", "search_code"})
 
@@ -26,17 +30,24 @@ class ToolRegistry:
     def call(self, name: str, arguments: dict[str, object]) -> ToolResult:
         tool = self._tools.get(name)
         if tool is None:
+            logger.warning("tool_error UNKNOWN_TOOL")
             return ToolResult(ok=False, error="UNKNOWN_TOOL")
+        logger.info("tool_call %s", name)
         try:
             validated = tool.arguments.model_validate(arguments)
         except ValidationError:
+            logger.warning("tool_error INVALID_ARGUMENTS")
             return ToolResult(ok=False, error="INVALID_ARGUMENTS")
         try:
             result = ToolResult(ok=True, data=tool.execute(validated))
         except ToolError as exc:
+            logger.warning("tool_error EXECUTION_ERROR")
             return ToolResult(ok=False, error=exc.code)
         except Exception:
+            logger.warning("tool_error EXECUTION_ERROR")
             return ToolResult(ok=False, error="TOOL_ERROR")
         if len(result.model_dump_json()) > self.max_output_chars:
+            logger.warning("tool_error OUTPUT_LIMIT")
             return ToolResult(ok=False, error="OUTPUT_LIMIT")
+        logger.info("tool_success %s", name)
         return result

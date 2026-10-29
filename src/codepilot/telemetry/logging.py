@@ -12,6 +12,20 @@ SAFE_EVENTS = {
     "docker_smoke FAIL",
     "docker_cleanup FAIL",
     *(
+        f"tool_{status} {name}"
+        for status in ("call", "success")
+        for name in ("list_files", "read_file", "search_code")
+    ),
+    *(
+        f"tool_error {code}"
+        for code in (
+            "UNKNOWN_TOOL",
+            "INVALID_ARGUMENTS",
+            "EXECUTION_ERROR",
+            "OUTPUT_LIMIT",
+        )
+    ),
+    *(
         f"gemini_error {code}"
         for code in (
             "AUTHENTICATION_ERROR",

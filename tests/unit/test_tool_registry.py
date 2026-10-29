@@ -46,3 +46,37 @@ def test_output_limit_and_unexpected_error():
 
     registry.register(ReadOnlyTool("list_files", Args, fail))
     assert registry.call("list_files", {"path": "x"}).error == "TOOL_ERROR"
+
+
+def test_tool_audit_events_never_include_arguments_or_exceptions(capsys):
+    import json
+
+    from codepilot.telemetry.logging import configure_logging
+
+    configure_logging()
+    marker = "synthetic-private-value"
+    registry = ToolRegistry(max_output_chars=256)
+    registry.register(ReadOnlyTool("read_file", Args, lambda args: {"content": marker}))
+    registry.call("read_file", {"path": marker})
+    registry.call(marker, {})
+    registry.call("read_file", {"path": 1})
+
+    def fail(args):
+        raise RuntimeError(marker)
+
+    registry.register(ReadOnlyTool("list_files", Args, fail))
+    registry.call("list_files", {"path": marker})
+    registry.register(ReadOnlyTool("search_code", Args, lambda args: {"content": "x" * 1000}))
+    registry.call("search_code", {"path": marker})
+    output = capsys.readouterr().err
+    assert marker not in output
+    events = {json.loads(line)["event"] for line in output.splitlines()}
+    assert {
+        "tool_call read_file",
+        "tool_success read_file",
+        "tool_error UNKNOWN_TOOL",
+        "tool_error INVALID_ARGUMENTS",
+        "tool_error EXECUTION_ERROR",
+        "tool_error OUTPUT_LIMIT",
+    }.issubset(events)
+    assert "[REDACTED]" not in events
