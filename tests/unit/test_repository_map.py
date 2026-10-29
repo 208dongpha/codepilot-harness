@@ -88,6 +88,7 @@ def test_ast_walk_stops_at_deadline(workspace):
         result = RepositoryMapper(workspace).build(["pkg/auth.py"])
     assert result.truncated
     assert not result.modules[0].symbols
+    assert result.reasons == ["deadline"]
 
 
 def test_only_exact_initializer_name_marks_package(workspace):
@@ -95,3 +96,45 @@ def test_only_exact_initializer_name_marks_package(workspace):
     mapping = RepositoryMapper(workspace).build()
     module = next(entry for entry in mapping.modules if entry.path == "not__init__.py")
     assert not module.package
+
+
+def test_empty_map_complete_but_skipped_and_syntax_failures_are_incomplete(workspace):
+    from codepilot.context.repository_map import RepositoryMap
+
+    assert not RepositoryMap().incomplete
+    (workspace.root / "bad.py").write_text("def broken(:")
+    result = RepositoryMapper(workspace).build(["bad.py", "missing.py"])
+    assert not result.modules and result.incomplete
+    assert result.skipped == result.syntax_errors == 1
+    assert set(result.reasons) == {"read_error", "syntax_error"}
+
+
+@pytest.mark.parametrize(
+    "field,value,reason",
+    [
+        ("max_scan_entries", 1, "scan_limit"),
+        ("max_symbols", 1, "symbol_limit"),
+        ("max_map_chars", 256, "map_budget"),
+        ("max_total_bytes", 1, "byte_limit"),
+        ("max_file_bytes", 1, "file_size_limit"),
+    ],
+)
+def test_map_reports_each_resource_reason(workspace, field, value, reason):
+    setattr(workspace.config, field, value)
+    result = RepositoryMapper(workspace).build()
+    assert result.incomplete and reason in result.reasons
+    assert len(result.model_dump_json()) <= workspace.config.max_map_chars
+
+
+def test_repeated_failures_use_bounded_metadata(workspace):
+    paths = [f"missing-{i}.py" for i in range(100)]
+    result = RepositoryMapper(workspace).build(paths, max_chars=256)
+    assert result.skipped == 100 and result.incomplete
+    assert result.reasons == ["read_error"]
+    assert len(result.model_dump_json()) <= 256
+
+
+def test_input_path_limit_is_explicit(workspace):
+    workspace.config.max_files = 1
+    result = RepositoryMapper(workspace).build(["pkg/auth.py", "pkg/__init__.py"])
+    assert result.incomplete and "input_limit" in result.reasons

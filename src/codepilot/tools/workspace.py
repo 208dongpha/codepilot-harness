@@ -70,6 +70,7 @@ def linked(info: os.stat_result) -> bool:
 class FileListing:
     paths: list[str]
     truncated: bool = False
+    skipped: int = 0
 
 
 class Workspace:
@@ -136,6 +137,7 @@ class Workspace:
         pending = [base]
         entries = 0
         depth_truncated = False
+        skipped = 0
         deadline = time.monotonic() + self.config.timeout_seconds
         while pending:
             folder = pending.pop()
@@ -147,7 +149,7 @@ class Workspace:
                     for entry in listing:
                         entries += 1
                         if entries > self.config.max_scan_entries or time.monotonic() > deadline:
-                            return FileListing(sorted(paths), True)
+                            return FileListing(sorted(paths), True, skipped)
                         if excluded(entry.name):
                             continue
                         children.append(entry.name)
@@ -166,15 +168,16 @@ class Workspace:
                         elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
                             self.resolve(relative)
                             if len(paths) >= cap:
-                                return FileListing(sorted(paths), True)
+                                return FileListing(sorted(paths), True, skipped)
                             paths.append(relative)
                     except (ToolError, OSError):
+                        skipped += 1
                         continue
             except PermissionError:
                 raise ToolError("PERMISSION_DENIED") from None
             except OSError:
                 raise ToolError("READ_ERROR") from None
-        return FileListing(sorted(paths), depth_truncated)
+        return FileListing(sorted(paths), depth_truncated, skipped)
 
     def read_text(self, relative: str) -> str:
         path = self.resolve(relative)
