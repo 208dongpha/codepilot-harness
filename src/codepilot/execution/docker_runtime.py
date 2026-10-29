@@ -32,15 +32,52 @@ class DockerRuntime:
             return subprocess.run(
                 ["docker", *args], capture_output=True, text=True, timeout=timeout, check=False
             )
-        except (OSError, subprocess.TimeoutExpired):
+        except subprocess.TimeoutExpired:
             logger.error("docker_error unavailable_or_timeout")
-            raise DockerError("Docker unavailable or command timed out.") from None
+            raise DockerError("Docker command timed out.") from None
+        except OSError:
+            logger.error("docker_error unavailable_or_timeout")
+            raise DockerError("Docker unavailable.") from None
 
     def available(self) -> bool:
         try:
             return self._call(["info", "--format", "{{.ServerVersion}}"]).returncode == 0
         except DockerError:
             return False
+
+    def _cleanup(self, name: str) -> None:
+        failure = None
+        try:
+            removed = self._call(["rm", "--force", name])
+            if removed.returncode:
+                failure = "removal command returned nonzero exit code"
+        except DockerError as exc:
+            failure = str(exc)
+
+        # A failed inspect cannot distinguish absence from a daemon failure.
+        # A successful exact-name listing can prove the container is absent.
+        state = "final state NOT VERIFIED"
+        try:
+            remaining = self._call(
+                [
+                    "container",
+                    "ls",
+                    "--all",
+                    "--filter",
+                    f"name=^/{name}$",
+                    "--format",
+                    "{{.Names}}|{{.State}}",
+                ]
+            )
+            if remaining.returncode == 0:
+                state = "container still exists" if remaining.stdout.strip() else "absence verified"
+            else:
+                state = "final state NOT VERIFIED (query returned nonzero exit code)"
+        except DockerError as exc:
+            state = f"final state NOT VERIFIED ({exc})"
+        if failure or state != "absence verified":
+            detail = failure or "removal command returned success"
+            raise DockerError(f"Container cleanup failed for {name}: {detail}; {state}.")
 
     def smoke_test(self) -> SmokeResult:
         if not self.available():
@@ -51,6 +88,7 @@ class DockerRuntime:
                 "-t codepilot-sandbox:phase1 docker"
             )
         name = "codepilot-smoke-" + uuid4().hex
+        execution_error = None
         try:
             created = self._call(
                 [
@@ -91,13 +129,17 @@ class DockerRuntime:
                 or result.stdout.strip() != "codepilot-smoke-ok"
             ):
                 raise DockerError("Docker smoke test failed.")
-            logger.info("docker_smoke PASS")
-            return result
-        except DockerError:
+        except DockerError as exc:
+            execution_error = exc
             logger.error("docker_smoke FAIL")
             raise
         finally:
-            cleanup = self._call(["rm", "--force", name])
-            if cleanup.returncode:
+            try:
+                self._cleanup(name)
+            except DockerError as cleanup_error:
                 logger.error("docker_cleanup FAIL")
-                raise DockerError("Container cleanup failed; inspect Docker containers.")
+                if execution_error is not None:
+                    raise DockerError(f"{execution_error} {cleanup_error}") from None
+                raise
+        logger.info("docker_smoke PASS")
+        return result
