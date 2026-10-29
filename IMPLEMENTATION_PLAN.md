@@ -1,8 +1,8 @@
 
 # CODEPILOT HARNESS — KẾ HOẠCH TRIỂN KHAI
 
-> **Trạng thái:** Chưa bắt đầu
-> **Phase được phép triển khai:** Phase 1
+> **Trạng thái:** Phase 1 APPROVED; Phase 2 AUTHORIZED
+> **Phase được phép triển khai:** Phase 2 (CP-007 đến CP-011)
 > **Kiến trúc:** Modular Monolith
 > **Thời gian dự kiến:** 8 tuần
 > **Người triển khai:** Codex
@@ -50,7 +50,7 @@ Codex PHẢI:
 
 Codex KHÔNG ĐƯỢC:
 
-- Tự động triển khai Phase 2–8.
+- Tự động triển khai Phase 3–8.
 - Tự thay đổi các quyết định kiến trúc.
 - Hardcode API key hoặc secrets.
 - Bỏ qua test để báo hoàn thành.
@@ -884,6 +884,9 @@ Không được tự nhận PASS.
 
 # 6. PHASE 2 — REPOSITORY EXPLORATION
 
+> Project Owner đã cho phép CP-007 đến CP-011. Read-only tools được chạy trong Harness sau kiểm tra workspace và resource limits; không thực thi source repository.
+> Theo điều chỉnh trực tiếp: làm trên branch hiện tại, không tạo branch mới. Chỉ commit local; chưa push khi chưa có phép.
+
 ## Mục tiêu
 
 Cho phép Agent khám phá và đọc repository Python một cách an toàn.
@@ -1503,12 +1506,12 @@ Chỉ release khi Project Owner phê duyệt.
 Ban đầu:
 
 ```text
-AUTHORIZED_PHASE = 1
+AUTHORIZED_PHASE = 2
 ```
 
-Codex chỉ được triển khai Phase 1.
-
-Phase 2–8 chỉ là kế hoạch tham khảo.
+Phase 1 đã được Project Owner phê duyệt code review.
+Codex chỉ được triển khai Phase 2, CP-007 đến CP-011.
+Phase 3–8 chỉ là kế hoạch tham khảo và vẫn LOCKED.
 
 Không được tự chuyển phase.
 
@@ -1690,7 +1693,9 @@ Một phase hoàn thành khi:
 
 ---
 
-# 18. PROMPT GIAO CODEX TRIỂN KHAI PHASE 1
+# 18. PROMPT GIAO CODEX TRIỂN KHAI PHASE 1 (LƯU THAM KHẢO)
+
+> Prompt lịch sử. Quyền hiện tại theo mục 13 và 19: Phase 2 AUTHORIZED.
 
 Bạn là Software Engineer phụ trách triển khai dự án
 CodePilot Harness.
@@ -1747,8 +1752,8 @@ KHÔNG ĐƯỢC TỰ ĐỘNG BẮT ĐẦU PHASE 2.
 
 | Phase | Trạng thái |
 |---|---|
-| Phase 1 | NOT STARTED |
-| Phase 2 | LOCKED |
+| Phase 1 | APPROVED (code review) |
+| Phase 2 | AUTHORIZED — đang triển khai, chờ review |
 | Phase 3 | LOCKED |
 | Phase 4 | LOCKED |
 | Phase 5 | LOCKED |
