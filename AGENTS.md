@@ -311,7 +311,7 @@ When a test fails, investigate the root cause rather than suppressing the failur
 
 - Work directly on the `main` branch.
 - Do not automatically create or switch branches.
-- Do not automatically push or merge.
+- Commit và push để bàn giao review theo quyền thường trực tại mục 8.6. Không tự merge.
 - Never force push.
 - Never commit secrets.
 - Never overwrite existing user changes.
@@ -390,9 +390,9 @@ Choose scopes based on the actual module or functionality.
 
 ### 8.4 Commit Authorization
 
-- Prepare changes and verify them before requesting commit authorization.
+- Chuẩn bị và xác minh thay đổi trước khi commit theo quyền tại mục 8.6.
 - Only create commits when the Project Owner has authorized committing.
-- Authorization to implement a phase does not automatically authorize committing or pushing.
+- Quyền commit/push thường trực tại mục 8.6 áp dụng cho công việc đã được phép; không tự cấp quyền triển khai phase hoặc tính năng mới.
 - When commit authorization is granted, create separate Conventional Commits for independent logical features.
 - Stage only files relevant to the intended commit.
 - Avoid `git add .` when unrelated or sensitive files may be present.
@@ -413,8 +413,13 @@ Review the staged diff before finalizing the commit.
 
 ### 8.6 Push Policy
 
-- Only push when explicitly authorized by the Project Owner.
-- Do not automatically push after committing.
+Project Owner đã cấp quyền thường trực cho **toàn bộ dự án**, áp dụng cho mọi phase, chức năng và lượt sửa review đã được phép:
+
+- Khi hoàn tất công việc và các kiểm tra bắt buộc, tạo Conventional Commits theo từng chức năng rồi push lên `main` để reviewer đọc được trên GitHub.
+- Không dừng ở commit local để chờ một yêu cầu push lặp lại. Không cần hỏi lại quyền commit/push cho mỗi lần bàn giao review trong phạm vi này.
+- Chỉ đưa vào commit các thay đổi thuộc công việc được phép và tài liệu liên quan; giữ nguyên thay đổi khác của người dùng.
+- Sau khi push, báo commit hash, kết quả xác minh, giới hạn còn lại và link review, rồi dừng chờ review.
+- Quyền này không cho phép tự merge, force push, viết lại lịch sử hoặc bắt đầu phase chưa được phê duyệt. Nếu Project Owner có chỉ thị mới như “chỉ local” hoặc “không push”, tuân theo chỉ thị mới đó.
 - Do not force push.
 - Do not merge branches automatically.
 - Report the local commit hashes when commits have been created.
