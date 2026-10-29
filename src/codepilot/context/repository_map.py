@@ -70,7 +70,9 @@ class RepositoryMapper:
             except (SyntaxError, ValueError, RecursionError):
                 result.syntax_errors += 1
                 continue
-            entry = ModuleEntry(path=normalized, package=normalized.endswith("__init__.py"))
+            entry = ModuleEntry(
+                path=normalized, package=normalized.rsplit("/", 1)[-1] == "__init__.py"
+            )
             pending = [(tree, "")]
             while pending:
                 if time.monotonic() >= deadline:

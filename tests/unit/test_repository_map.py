@@ -88,3 +88,10 @@ def test_ast_walk_stops_at_deadline(workspace):
         result = RepositoryMapper(workspace).build(["pkg/auth.py"])
     assert result.truncated
     assert not result.modules[0].symbols
+
+
+def test_only_exact_initializer_name_marks_package(workspace):
+    (workspace.root / "not__init__.py").write_text("")
+    mapping = RepositoryMapper(workspace).build()
+    module = next(entry for entry in mapping.modules if entry.path == "not__init__.py")
+    assert not module.package
