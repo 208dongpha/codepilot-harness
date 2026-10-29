@@ -48,9 +48,15 @@ Dòng trọng tâm ưu tiên reference từ search; nếu không có, dùng dòn
 
 Budget tính bằng **số ký tự của JSON đã serialize**, qua `len(context.model_dump_json())`. Đây không phải token budget của Gemini. `context.to_message()["content"]` chính là JSON đó, gồm câu hỏi, map, source và chỉ dẫn xử lý repository như dữ liệu không đáng tin.
 
-Map được giới hạn riêng và dành tối đa khoảng một phần ba context budget. Builder bỏ bớt module nếu phần nền quá lớn; excerpt bị rút ngắn theo prefix cho đến khi vừa budget. Mọi lần cắt đều có cờ `truncated`. Nếu riêng câu hỏi và phần nền vẫn không vừa, trả lỗi `CONTEXT_BUDGET_EXCEEDED`, không âm thầm sửa câu hỏi.
+Map được giới hạn riêng và dành tối đa khoảng một phần ba context budget. Builder bỏ bớt module nếu phần nền quá lớn. Excerpt được rút ngắn bằng cách bỏ dòng ở biên xa dòng trọng tâm nhất; dòng trọng tâm được giữ lại. Chỉ khi riêng dòng đó vẫn không vừa mới lấy prefix và đặt `partial_line=true`; lúc đó `start_line=end_line` là số dòng thực tế. Mọi lần cắt đều có cờ `truncated`. Nếu riêng câu hỏi và metadata cần thiết vẫn không vừa, trả lỗi `CONTEXT_BUDGET_EXCEEDED`, không âm thầm sửa câu hỏi hoặc bỏ mất thông tin thiếu dữ liệu.
 
-Khi source bị cắt giữa dòng, số dòng vẫn chỉ phần đã giữ; không được diễn giải excerpt như toàn bộ file. Nếu không chọn được source, câu trả lời cần dựa vào map hoặc thông báo thiếu dữ liệu.
+Khi `partial_line=false`, nội dung tương ứng các dòng đầy đủ từ `start_line` đến `end_line` của văn bản đã chuẩn hóa newline, không tính ký tự kết thúc dòng cuối. Khi `partial_line=true`, nội dung chỉ là prefix của một dòng, không được diễn giải như dòng đầy đủ.
+
+Map và context có `incomplete` được tính từ cờ cắt, lý do và số đếm. Kết quả không có source nhưng `incomplete=false` khác với kết quả rỗng do không khám phá đủ. `reasons` dùng tối đa 15 mã cố định, chẳng hạn `scan_limit`, `read_error`, `map_budget`, `context_budget`, `source_limit`, `deadline`. Không chứa path hoặc thông báo lỗi của nguồn bị từ chối.
+
+Map giữ `skipped`, `scan_skipped`, `syntax_errors`. Context giữ `input_map_skipped`, `input_map_syntax_errors` từ map ban đầu, cùng `skipped_sources`, `scan_skipped`, `omitted_sources` của quá trình dựng context. `scan_skipped` đếm các lần entry không dùng được, không phải số file duy nhất. `omitted_sources` chỉ đếm các ứng viên đã xếp hạng nhưng không được đính kèm; không thể suy ra số nguồn chưa được duyệt do scan limit. File rỗng được đọc thành công không bị tính là nguồn lỗi.
+
+Metadata được giữ khi rebuild map, kể cả khi nguồn bị bỏ qua không còn xuất hiện trong danh sách module. Metadata cũng nằm trong JSON budget. Map không đủ chỗ cho metadata trả `MAP_BUDGET_TOO_SMALL`; context trả `CONTEXT_BUDGET_EXCEEDED`. Nếu không chọn được source, caller cần xem `incomplete`, `reasons` và các số đếm trước khi kết luận không có nội dung liên quan.
 
 ## 5. Dùng API hiện có
 

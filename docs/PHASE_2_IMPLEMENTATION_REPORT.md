@@ -1,5 +1,7 @@
 # Báo cáo triển khai Phase 2 — Repository Exploration
 
+> Cập nhật review: F-001/F-002 đã sửa, chờ review lại; Phase 2 chưa APPROVED. Kết quả hiện tại ở mục 12. Các mục 1–11 là bằng chứng của lượt triển khai ban đầu, đã được push sau đó theo quyền của Project Owner. Lượt sửa hiện tại bắt đầu từ `674a48c`, chỉ commit local, chưa push.
+
 ## 1. Tổng quan và quyền triển khai
 
 Project Owner đã phê duyệt code review Phase 1 và cho phép CP-007 đến CP-011. Đã triển khai đủ năm task, kiểm tra regression và chuẩn bị tài liệu giải thích core AI. Trạng thái Phase 2: **đã triển khai, chờ review; chưa được phê duyệt**. Phase 3–8 vẫn LOCKED.
@@ -160,3 +162,59 @@ Commit tài liệu hoàn tất sau khi tạo báo cáo; xem `git log origin/main
 ## 11. Yêu cầu review
 
 Source, tests, hướng dẫn core AI và các commit local đã sẵn sàng cho reviewer. Nhờ kiểm tra boundary, giới hạn tài nguyên, heuristic relevance và các giới hạn công khai trên. Không tự phê duyệt Phase 2. Dừng tại đây, không push/merge hoặc bắt đầu Phase 3 nếu chưa có chỉ thị mới.
+
+## 12. Kết quả sửa review F-001 và F-002
+
+### 12.1. Phạm vi và thay đổi
+
+Chỉ sửa metadata và việc lựa chọn/cắt dữ liệu của CP-010/CP-011. Không thay đổi kiến trúc Modular Monolith, cấu hình policy, kiểm tra path/link/secret, allowlist tool, Docker hoặc Gemini adapter. Không triển khai Agent Loop, write/edit hay Phase 3. Làm trên main; không push hoặc merge trong lượt sửa này.
+
+**F-001 — References chính xác:** Thay việc cắt đôi chuỗi bằng cắt nguyên dòng từ biên xa dòng trọng tâm nhất. Luôn giữ dòng trọng tâm nếu còn đủ budget cho excerpt. Cập nhật start_line/end_line theo các dòng thực tế còn lại. Chỉ khi riêng một dòng quá dài mới tìm prefix vừa budget bằng tìm kiếm nhị phân; đặt partial_line=true và start_line=end_line. Không cắt theo byte nên không phá ký tự Unicode. Giữ cách chuẩn hóa CRLF/CR thành LF có sẵn trong Workspace; nội dung excerpt không bao gồm terminator của dòng cuối.
+
+Test mới đối chiếu trực tiếp nội dung với các dòng gốc của fixture, thay vì chỉ đếm dòng từ chuỗi đã cắt. Bao phủ budget 900/1200 ký tự, Unicode, dòng dài và reference tập trung ở dòng 46. Test dòng Unicode quá dài xác nhận prefix không rỗng, partial_line=true và references đúng một dòng. Bộ test mới đã tái hiện lỗi trên implementation cũ trước khi sửa.
+
+**F-002 — Kết quả thiếu dữ liệu rõ ràng:** Thêm thuộc tính tính toán incomplete, danh sách reasons hữu hạn và các số đếm. Phân biệt kết quả rỗng đầy đủ với thiếu dữ liệu do scan/resource limits, nguồn không đọc được, syntax errors, map budget hoặc context budget. Giữ số đếm và lý do của map đầu vào khi rebuild, không thay chúng bằng trạng thái của danh sách module còn lại.
+
+Workspace chỉ thêm số đếm entry bị bỏ qua sau lỗi; không đổi quyết định cho phép/từ chối truy cập. Map ghi nhận scan_skipped, skipped, syntax_errors. Context giữ input_map_skipped/input_map_syntax_errors riêng, và thêm skipped_sources/scan_skipped/omitted_sources. Số đếm phản ánh các lần bỏ qua hoặc ứng viên đã biết, không khẳng định đếm được các file chưa duyệt và không phải thống kê file duy nhất giữa nhiều bước.
+
+Mã reasons giới hạn ở 15 loại đã định nghĩa, được gộp để không lặp theo số file. Metadata không chứa raw exception, path bị chặn hoặc nội dung nguồn bị bỏ qua. Cả metadata và thuộc tính computed đều được tính trong JSON budget. Map bỏ module nếu cần để giữ metadata; khi riêng metadata không vừa thì trả MAP_BUDGET_TOO_SMALL hoặc CONTEXT_BUDGET_EXCEEDED, không trả dữ liệu vượt budget và không che mất việc thiếu dữ liệu.
+
+### 12.2. Kết quả kiểm tra thực tế
+
+| Lệnh | Kết quả lượt sửa |
+|---|---|
+| `uv sync` | PASS: resolve 41 package, kiểm tra 41 package, không đổi dependency |
+| `uv run pytest -q` | PASS: **147 passed in 4.28s**, 0 thất bại, 0 bỏ qua |
+| `uv run ruff check .` | PASS: All checks passed! |
+| `git diff --check` | PASS: không có lỗi whitespace |
+| `uv run codepilot sandbox smoke-test` | PASS: exit 0, Docker thực tế, codepilot-smoke-ok, Smoke test: PASS |
+
+Toàn bộ 124 test trước lượt review vẫn chạy trong suite. Có thêm 23 trường hợp hồi quy sau khi mở rộng tham số, gồm references/budget/Unicode và từng nhóm kết quả chưa đầy đủ: scan limit, entry không dùng được, file không đọc được, file lớn, byte budget, symbol/map budget, deadline, input limit, source count, context budget, syntax errors và việc giữ metadata qua rebuild. Test lặp 100 lỗi đọc xác nhận metadata vẫn gọn, không tạo danh sách path lỗi. File rỗng được đọc thành công không bị báo là exploration thất bại.
+
+Các tình huống permission/deadline được mô phỏng bằng mock; không tuyên bố đã làm hỏng quyền hoặc daemon thật. Integration tests ripgrep/Docker và boundary/credential regression cũ đều chạy, không bỏ qua. Không mở hoặc in API key thật, không gọi Gemini live trong lượt sửa này.
+
+### 12.3. Tệp thay đổi trong lượt sửa
+
+1. `src/codepilot/context/builder.py` — cắt nguyên dòng, partial_line, coverage metadata, bảo toàn input diagnostics và budget cuối.
+2. `src/codepilot/context/repository_map.py` — lý do thiếu dữ liệu, số đếm scan, incomplete và giới hạn metadata/map output.
+3. `src/codepilot/tools/workspace.py` — thêm số đếm entry bị bỏ qua, giữ nguyên policy và file access.
+4. `tests/unit/test_context_builder.py` — hồi quy references và các trường hợp context chưa đầy đủ.
+5. `tests/unit/test_repository_map.py` — kiểm tra lý do thiếu dữ liệu và metadata hữu hạn.
+6. `docs/CORE_AI_CONTEXT_GUIDE.md` — giải thích cách cắt mới và cách đọc coverage metadata.
+7. `docs/PHASE_2_IMPLEMENTATION_REPORT.md` — bằng chứng và giới hạn của lượt sửa này.
+
+### 12.4. Commit local và review
+
+- `1395983 fix(context): preserve focused line boundaries when fitting excerpts`
+- `3b6fc3f fix(context): preserve bounded exploration coverage diagnostics`
+
+Tài liệu được commit riêng sau khi cập nhật báo cáo; hash cuối có trong Git log. Chưa push và không merge.
+
+### 12.5. Giới hạn còn lại
+
+- Budget vẫn tính bằng ký tự JSON, không phải token Gemini. Metadata mới chiếm một phần budget trước đây dành cho source; budget quá nhỏ có thể trả lỗi rõ ràng.
+- scan_limit gộp các giới hạn duyệt của Workspace; chưa phân loại riêng entry/file/depth/scan timeout. Số file thực sự chưa được duyệt không xác định được nên chỉ có cờ/lý do, không đưa số đếm giả.
+- incomplete là tín hiệu bảo thủ: cả việc chỉ đính kèm một cửa sổ của file cũng được ghi nhận bằng source_window. Nó không khẳng định mọi phần bị bỏ đều có liên quan đến câu hỏi.
+- Vẫn giữ giới hạn đã công khai ở mục 10: snapshot nhiều file không nguyên tử, AST parse chưa bị cưỡng chế bằng worker riêng, secret detection theo mẫu và không xác minh Gemini live/quota.
+
+F-001 và F-002 đã có sửa đổi và test tương ứng. Phase 2 chưa được phê duyệt; dừng chờ review, Phase 3–8 vẫn khóa.
