@@ -1,0 +1,20 @@
+[llm]
+provider = "gemini"
+model = "gemini-3.8-flash"
+temperature = 0.2
+
+[agent]
+max_steps = 20
+max_verification_retries = 3
+
+[permissions]
+mode = "ask_before_write"
+
+[sandbox]
+enabled = true
+engine = "docker"
+network_enabled = false
+timeout_seconds = 60
+
+[logging]
+level = "INFO"
