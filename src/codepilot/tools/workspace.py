@@ -45,7 +45,9 @@ SECRET_CONTENT = re.compile(
     r"(?:gh[pousr]_|github_pat_)[0-9A-Za-z_]{20,}|"
     r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|"
     r"(?i:(?:api[_-]?key|access[_-]?token|secret|password|authorization)"
-    r"[\"']?\s*[:=]\s*[\"']?[^\s\"',;}{]{8,})"
+    r"[\"']?\s*[:=]\s*[\"'][^\"'\r\n]+[\"'])|"
+    r"(?im:^[ \t]*(?:[a-z0-9_]*api[_-]?key|access[_-]?token|secret|password|authorization)"
+    r"[ \t]*[:=][ \t]*[a-z0-9_/.+-]+[ \t]*$)"
 )
 
 
@@ -82,6 +84,8 @@ class Workspace:
             raise ToolError("INVALID_WORKSPACE") from None
 
     def resolve(self, relative: str, *, directory: bool = False) -> Path:
+        if not isinstance(relative, str) or len(relative) > 512:
+            raise ToolError("ACCESS_DENIED")
         windows = PureWindowsPath(relative)
         if (
             not relative
@@ -92,7 +96,11 @@ class Workspace:
         ):
             raise ToolError("ACCESS_DENIED")
         parts = relative.replace("\\", "/").split("/")
-        if ".." in parts or any(excluded(part) for part in parts):
+        if (
+            ".." in parts
+            or any(excluded(part) for part in parts)
+            or any(part not in ("", ".") and part != part.rstrip(" .") for part in parts)
+        ):
             raise ToolError("ACCESS_DENIED")
         path = self.root
         try:
@@ -104,6 +112,8 @@ class Workspace:
                     raise ToolError("ACCESS_DENIED")
             resolved = path.resolve(strict=True)
             if not resolved.is_relative_to(self.root):
+                raise ToolError("ACCESS_DENIED")
+            if any(excluded(part) for part in resolved.relative_to(self.root).parts):
                 raise ToolError("ACCESS_DENIED")
             info = resolved.stat()
             if directory:

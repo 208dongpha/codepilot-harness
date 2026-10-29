@@ -156,3 +156,30 @@ def test_repository_config_overrides(monkeypatch):
 def test_invalid_workspace(tmp_path):
     with pytest.raises(ToolError, match="INVALID_WORKSPACE"):
         Workspace(RepositoryConfig(workspace=tmp_path / "absent"))
+
+
+@pytest.mark.parametrize("path", [".git./config", ".git /config", "main.py.", "main.py "])
+def test_windows_alias_paths_rejected(workspace, path):
+    assert registry(workspace).call("read_file", {"path": path}).error == "ACCESS_DENIED"
+
+
+@pytest.mark.parametrize(
+    "content", ['password="abc"', "password=abc", '{"api_key": "synthetic-example-value"}']
+)
+def test_short_sensitive_literals_are_not_returned(workspace, content):
+    (workspace.root / "settings.txt").write_text(content)
+    assert (
+        registry(workspace).call("read_file", {"path": "settings.txt"}).error == "SENSITIVE_CONTENT"
+    )
+
+
+def test_line_references_use_newlines_not_unicode_separators(workspace):
+    (workspace.root / "unicode.txt").write_text("first\u2028same line\nsecond", encoding="utf-8")
+    result = registry(workspace).call("read_file", {"path": "unicode.txt", "start_line": 2})
+    assert result.data["content"] == "second"
+
+
+def test_scan_timeout_returns_partial_listing(workspace):
+    with patch("codepilot.tools.workspace.time.monotonic", side_effect=[0, 10]):
+        result = workspace.list_files()
+    assert result.truncated and not result.paths

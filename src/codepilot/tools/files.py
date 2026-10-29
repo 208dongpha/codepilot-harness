@@ -1,3 +1,5 @@
+from io import StringIO
+
 from pydantic import Field
 
 from codepilot.tools.base import ReadOnlyTool, ToolArguments
@@ -35,7 +37,7 @@ class FileTools:
     def read_file(self, args: ReadFileArgs) -> dict[str, object]:
         text = self.workspace.read_text(args.path)
         path = self.workspace.resolve(args.path).relative_to(self.workspace.root).as_posix()
-        lines = text.splitlines(keepends=True)
+        lines = StringIO(text).readlines()
         selected = "".join(lines[args.start_line - 1 : args.start_line - 1 + args.max_lines])
         cap = self.workspace.config.max_output_chars // 4
         content = selected[:cap]
