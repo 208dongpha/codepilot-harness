@@ -145,32 +145,44 @@ class PatchTool:
         if not self._lock.acquire(blocking=False):
             raise PatchError("PATCH_BUSY")
         try:
-            self.permissions.consume(proposal.action)
-            path = self._target(proposal.target, allow_missing=proposal.operation == "create")
-            if proposal.operation == "create":
+            effective = PatchProposal(
+                operation=proposal.operation,
+                target=proposal.target,
+                expected_sha256=proposal.expected_sha256,
+                content=proposal.content,
+                diff=proposal.diff,
+            )
+            self.permissions.consume(effective.action)
+            path = self._target(
+                effective.target, allow_missing=effective.operation == "create"
+            )
+            if effective.operation == "create":
+                self._ensure_parent_directories(effective.target)
+                path = self._target(effective.target, allow_missing=True)
                 if path.exists():
                     raise PatchError("PATCH_CONFLICT")
-                path.parent.mkdir(parents=True, exist_ok=True)
-                self._write_atomic(path, proposal.content or "", create=True)
+                self._write_atomic(path, effective.content or "", create=True)
                 return PatchResult(
                     operation="create",
-                    target=proposal.target,
-                    sha256=_sha256(proposal.content or ""),
+                    target=effective.target,
+                    sha256=_sha256(effective.content or ""),
                 )
-            current = self._read_existing(proposal.target)
-            if _sha256(current) != proposal.expected_sha256:
+            current = self._read_existing(effective.target)
+            if _sha256(current) != effective.expected_sha256:
                 raise PatchError("STALE_PATCH")
-            if proposal.operation == "delete":
+            if effective.operation == "delete":
                 path.unlink()
-                return PatchResult(operation="delete", target=proposal.target)
+                return PatchResult(operation="delete", target=effective.target)
             self._write_atomic(
                 path,
-                proposal.content or "",
+                effective.content or "",
                 create=False,
-                expected_sha256=proposal.expected_sha256,
+                expected_sha256=effective.expected_sha256,
             )
             return PatchResult(
-                operation="replace", target=proposal.target, sha256=_sha256(proposal.content or "")
+                operation="replace",
+                target=effective.target,
+                sha256=_sha256(effective.content or ""),
             )
         finally:
             self._lock.release()
@@ -209,21 +221,43 @@ class PatchTool:
         try:
             for index, part in enumerate(parts):
                 path = path / part
-                if not path.exists() and allow_missing:
-                    if index < len(parts) - 1:
+                if not os.path.lexists(path):
+                    if allow_missing:
                         continue
-                    break
+                    raise PatchError("UNSAFE_TARGET")
                 info = path.lstat()
                 if linked(info):
                     raise PatchError("UNSAFE_TARGET")
-            resolved_parent = path.parent.resolve(strict=True)
-            if not resolved_parent.is_relative_to(self.workspace.root):
-                raise PatchError("UNSAFE_TARGET")
-            if path.exists():
-                info = path.stat()
-                if not stat.S_ISREG(info.st_mode) or info.st_nlink > 1:
+                resolved = path.resolve(strict=True)
+                if not resolved.is_relative_to(self.workspace.root):
+                    raise PatchError("UNSAFE_TARGET")
+                if index < len(parts) - 1:
+                    if not stat.S_ISDIR(info.st_mode):
+                        raise PatchError("UNSAFE_TARGET")
+                elif not stat.S_ISREG(info.st_mode) or info.st_nlink > 1:
                     raise PatchError("UNSAFE_TARGET")
             return path
+        except (OSError, ValueError):
+            raise PatchError("UNSAFE_TARGET") from None
+
+    def _ensure_parent_directories(self, relative: str) -> None:
+        parts = _safe_parts(relative)
+        current = self.workspace.root
+        try:
+            for part in parts[:-1]:
+                current = current / part
+                try:
+                    os.mkdir(current)
+                except FileExistsError:
+                    pass
+                info = current.lstat()
+                if linked(info) or not stat.S_ISDIR(info.st_mode):
+                    raise PatchError("UNSAFE_TARGET")
+                resolved = current.resolve(strict=True)
+                if not resolved.is_relative_to(self.workspace.root):
+                    raise PatchError("UNSAFE_TARGET")
+        except PatchError:
+            raise
         except (OSError, ValueError):
             raise PatchError("UNSAFE_TARGET") from None
 
@@ -260,7 +294,19 @@ class PatchTool:
         create: bool,
         expected_sha256: str | None = None,
     ) -> None:
-        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            parent_info = target.parent.lstat()
+            parent = target.parent.resolve(strict=True)
+            if (
+                linked(parent_info)
+                or not stat.S_ISDIR(parent_info.st_mode)
+                or not parent.is_relative_to(self.workspace.root)
+            ):
+                raise PatchError("UNSAFE_TARGET")
+        except PatchError:
+            raise
+        except (OSError, ValueError):
+            raise PatchError("UNSAFE_TARGET") from None
         fd, temporary = tempfile.mkstemp(prefix=".codepilot-", dir=target.parent)
         temp_path = Path(temporary)
         try:

@@ -65,6 +65,8 @@ class PendingAction(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     action: Action
+    action_id: str
+    action_canonical: str = Field(exclude=True, repr=False)
     created_at: float
     expires_at: float
     approved: bool = False
@@ -85,7 +87,7 @@ class PermissionEngine:
 
     @property
     def pending(self) -> PendingAction | None:
-        return self._pending
+        return self._pending.model_copy(deep=True) if self._pending is not None else None
 
     def evaluate(self, action: Action) -> Decision:
         if action.tool in READ_ONLY_TOOLS and action.operation == "read":
@@ -99,11 +101,13 @@ class PermissionEngine:
             raise PermissionError("ACTION_NOT_APPROVABLE")
         now = self._clock()
         self._pending = PendingAction(
-            action=action,
+            action=action.model_copy(deep=True),
+            action_id=action.action_id,
+            action_canonical=action.canonical(),
             created_at=now,
             expires_at=now + self.ttl_seconds,
         )
-        return self._pending
+        return self._pending.model_copy(deep=True)
 
     def approve(self, action_id: str) -> None:
         pending = self._require_exact(action_id)
@@ -121,7 +125,15 @@ class PermissionEngine:
 
     def consume(self, action: Action) -> bool:
         pending = self._pending
-        if pending is None or pending.action.action_id != action.action_id:
+        try:
+            matches = (
+                pending is not None
+                and pending.action_id == action.action_id
+                and pending.action_canonical == action.canonical()
+            )
+        except (TypeError, ValueError):
+            matches = False
+        if not matches or pending is None:
             raise PermissionError("APPROVAL_MISMATCH")
         self._ensure_active(pending)
         if not pending.approved:
@@ -130,7 +142,7 @@ class PermissionEngine:
         return True
 
     def _require_exact(self, action_id: str) -> PendingAction:
-        if self._pending is None or self._pending.action.action_id != action_id:
+        if self._pending is None or self._pending.action_id != action_id:
             raise PermissionError("APPROVAL_MISMATCH")
         return self._pending
 

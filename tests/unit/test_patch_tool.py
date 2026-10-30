@@ -62,6 +62,37 @@ def test_create_and_delete_are_conflict_checked_and_approval_scoped(isolated):
     assert (host / "app.py").read_text(encoding="utf-8") == "old\n"
 
 
+def test_create_file_in_new_nested_directories(isolated):
+    host, sandbox = isolated
+    engine = PermissionEngine()
+    tool = PatchTool(sandbox, engine)
+    proposal = tool.propose_create("new/package/module.py", "created\n")
+    approve(engine, proposal)
+
+    tool.apply(proposal)
+
+    assert (sandbox.root / "new/package/module.py").read_text(encoding="utf-8") == "created\n"
+    assert not (host / "new").exists()
+
+
+def test_nested_create_rejects_symlink_added_after_proposal(isolated, tmp_path):
+    _, sandbox = isolated
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    engine = PermissionEngine()
+    tool = PatchTool(sandbox, engine)
+    proposal = tool.propose_create("new/module.py", "created\n")
+    try:
+        (sandbox.root / "new").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("Directory symlink creation is unavailable.")
+    approve(engine, proposal)
+
+    with pytest.raises(PatchError, match="UNSAFE_TARGET"):
+        tool.apply(proposal)
+    assert not (outside / "module.py").exists()
+
+
 def test_denial_replay_and_unauthorized_write_have_no_side_effect(isolated):
     _, sandbox = isolated
     engine = PermissionEngine()
@@ -77,6 +108,41 @@ def test_denial_replay_and_unauthorized_write_have_no_side_effect(isolated):
     tool.apply(proposal)
     with pytest.raises(PermissionError, match="APPROVAL_ALREADY_USED"):
         tool.apply(proposal)
+
+
+def test_mutating_returned_pending_action_cannot_change_approved_content(isolated):
+    _, sandbox = isolated
+    engine = PermissionEngine()
+    tool = PatchTool(sandbox, engine)
+    original = tool.propose_replace("app.py", "approved\n")
+    exposed = engine.request(original.action)
+    engine.approve(original.action.action_id)
+
+    tampered = original.model_copy(update={"content": "tampered\n"})
+    exposed.action.arguments["content_sha256"] = tampered.action.arguments["content_sha256"]
+
+    with pytest.raises(PermissionError, match="APPROVAL_MISMATCH"):
+        tool.apply(tampered)
+    assert (sandbox.root / "app.py").read_text(encoding="utf-8") == "old\n"
+
+
+def test_mutation_after_approval_consumption_cannot_change_effective_patch(isolated, monkeypatch):
+    _, sandbox = isolated
+    engine = PermissionEngine()
+    tool = PatchTool(sandbox, engine)
+    proposal = tool.propose_replace("app.py", "approved\n")
+    approve(engine, proposal)
+    original_consume = engine.consume
+
+    def mutate_after_consume(action):
+        consumed = original_consume(action)
+        object.__setattr__(proposal, "content", "tampered\n")
+        return consumed
+
+    monkeypatch.setattr(engine, "consume", mutate_after_consume)
+    tool.apply(proposal)
+
+    assert (sandbox.root / "app.py").read_text(encoding="utf-8") == "approved\n"
 
 
 @pytest.mark.parametrize("path", ["../outside.py", "/outside.py", "secrets/key.py"])
