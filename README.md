@@ -13,6 +13,13 @@ Unlike a simple LLM chatbot, CodePilot focuses on building the **Agent Harness**
 
 The project is intended as an advanced portfolio project, developed over approximately 8 weeks.
 
+## How CodePilot Harness Works
+
+![CodePilot Harness — System Workflow](assets/codepilot-workflow.png)
+
+> High-level vision of the complete workflow.
+> Some capabilities are planned for upcoming phases.
+
 ### Core Principles
 
 1. The LLM proposes actions; the Harness controls execution.
