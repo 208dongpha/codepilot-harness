@@ -18,6 +18,14 @@ class TokenBudgetDecision(BaseModel):
 
 
 class TokenBudget:
+    """Bound model input with exact counting near the limit when available.
+
+    The UTF-8-byte fallback is intentionally rough: model tokenization can vary for Unicode,
+    escape-heavy text, source code, and model versions. It is never reported as exact. Near the
+    configured limit, lack of an exact count therefore fails closed instead of trusting the
+    heuristic.
+    """
+
     def __init__(
         self,
         max_input_tokens: int,
@@ -45,14 +53,19 @@ class TokenBudget:
         estimate = max(1, (len(serialized.encode("utf-8")) + 2) // 3)
         tokens = estimate
         exact = False
-        if self.counter is not None and estimate > self.input_limit * 3 // 4:
-            try:
-                counted = await self.counter(messages, tools)
-            except Exception:
-                counted = None
+        near_limit = estimate >= self.input_limit * 3 // 4
+        if near_limit:
+            counted = None
+            if self.counter is not None:
+                try:
+                    counted = await self.counter(messages, tools)
+                except Exception:
+                    counted = None
             if counted is not None and counted >= 0:
                 tokens = counted
                 exact = True
+            else:
+                raise TokenBudgetError("TOKEN_COUNT_UNAVAILABLE_NEAR_LIMIT")
         if tokens > self.input_limit:
             raise TokenBudgetError("TOKEN_BUDGET_EXCEEDED")
         return TokenBudgetDecision(
