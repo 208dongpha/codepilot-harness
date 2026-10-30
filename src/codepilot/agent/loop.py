@@ -114,6 +114,23 @@ class AgentLoop:
             return self._result()
         self.state.transition(AgentStatus.RUNNING)
         self.messages.append(self._observation(call, result.model_dump_json()))
+        self.messages.append(
+            Message(
+                role="user",
+                content=json.dumps(
+                    {
+                        "context_status": "STALE_AFTER_PATCH",
+                        "changed_path": proposal.target,
+                        "instruction": (
+                            "Repository context created before this patch is stale for the "
+                            "changed path. Use read_file or search_code for current "
+                            "isolated-workspace data."
+                        ),
+                    },
+                    separators=(",", ":"),
+                ),
+            )
+        )
         self._pending_proposal = None
         self._pending_call = None
         pending = self._process_calls(self._queued_calls)

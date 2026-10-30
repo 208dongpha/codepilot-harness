@@ -162,6 +162,34 @@ async def test_calls_after_a_pending_patch_resume_in_order(harness):
     assert "value = 2" in tool_messages[1]["content"]
 
 
+async def test_patch_marks_original_repository_context_stale(harness):
+    _, _, permissions, provider, loop = harness
+    provider.generate_turn.side_effect = [
+        ModelTurn(
+            tool_calls=[
+                ToolCall(
+                    id="patch-1",
+                    name="apply_patch",
+                    arguments={
+                        "operation": "replace",
+                        "target": "app.py",
+                        "content": "value = 2\n",
+                    },
+                )
+            ]
+        ),
+        ModelTurn(text="Done"),
+    ]
+    waiting = await loop.start("Change app")
+    permissions.approve(waiting.pending.action.action_id)
+    await loop.resume()
+
+    messages = provider.generate_turn.call_args_list[1].args[0]
+    stale = [message for message in messages if "STALE_AFTER_PATCH" in message.get("content", "")]
+    assert len(stale) == 1
+    assert "app.py" in stale[0]["content"]
+
+
 async def test_denial_and_cancellation_stop_pending_workflow(harness):
     _, isolated, permissions, provider, loop = harness
     provider.generate_turn.return_value = ModelTurn(
