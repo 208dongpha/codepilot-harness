@@ -5,8 +5,8 @@
 Đã triển khai CP-012 đến CP-016 trong phạm vi Phase 3. Phase 1 và Phase 2 giữ nguyên
 tính tương thích. Phase 4–8 chưa được triển khai.
 
-Phase 3 hiện ở trạng thái **đã triển khai, chờ review**. Báo cáo này không tuyên bố
-Phase 3 đã được phê duyệt.
+Phase 3 hiện ở trạng thái **đã sửa các finding F-001 đến F-004, chờ review lại**. Báo cáo
+này không tuyên bố Phase 3 đã được phê duyệt.
 
 ## 2. Chức năng hoàn thành
 
@@ -18,7 +18,8 @@ Phase 3 đã được phê duyệt.
   trúc; model output không có quyền tự cấp phép.
 - Permission Engine có `ALLOW`, `ASK`, `DENY`; action ID là SHA-256 của canonical JSON
   gồm tool, operation, target và arguments. Approval khớp exact action, hết hạn, dùng một
-  lần và mất hiệu lực khi action pending thay đổi.
+  lần và mất hiệu lực khi action pending thay đổi. Snapshot canonical bất biến được đối
+  chiếu lại tại thời điểm thực thi để dữ liệu lồng nhau bị sửa không đổi được action đã duyệt.
 - Patch Tool hỗ trợ create, replace và delete cho một file mỗi action. Proposal có diff,
   expected content hash và content hash. Không ghi Host trong Phase 3.
 - CLI hỗ trợ `/approve`, `/deny`, `/cancel`; hiển thị action ID, operation, target và diff
@@ -52,8 +53,9 @@ Phase 3 đã được phê duyệt.
 6. Read-only call được Permission Engine cho phép rồi Tool Registry validate lại bằng
    Pydantic.
 7. Patch call tạo proposal và chuyển sang `WAITING_APPROVAL`.
-8. Sau approval, patch được áp vào workspace cô lập; các call còn lại trong cùng batch tiếp
-   tục đúng thứ tự.
+8. Sau approval, patch được áp vào workspace cô lập; Agent Loop thêm thông báo bounded
+   `STALE_AFTER_PATCH` cho đường dẫn vừa đổi. Các call còn lại trong cùng batch tiếp tục đúng
+   thứ tự và có thể đọc nội dung mới từ workspace cô lập.
 9. Provider error, malformed response, budget exhaustion hoặc cancellation chuyển sang
    trạng thái kết thúc phù hợp.
 
@@ -64,6 +66,10 @@ Phase 3 đã được phê duyệt.
 - Tool/operation ngoài allowlist: `DENY`.
 - Canonical JSON sort key, UTF-8 và từ chối NaN/Infinity.
 - Approval chỉ áp dụng cho pending action hiện tại, có TTL mặc định 300 giây và single-use.
+- `request()` và thuộc tính `pending` chỉ trả deep copy; engine giữ action, action ID và
+  canonical JSON riêng. `consume()` đối chiếu đồng thời ID và canonical JSON tại execution.
+- Patch Tool tạo snapshot proposal hiệu lực trước khi consume approval; mutation xảy ra sau
+  consume không thể đổi content thực tế được ghi.
 - Replay cùng approval bị từ chối. Một yêu cầu mới của con người vẫn có thể approve lại
   cùng exact action.
 - Model text, repository content và tool observation không đi vào API approve.
@@ -76,6 +82,8 @@ Phase 3 đã được phê duyệt.
 - Không chép `.env`, key material, file nhạy cảm, symlink, reparse point hoặc hardlink.
 - Target từ chối absolute path, drive/UNC, `..`, ADS, alias Windows, control character và
   excluded path.
+- Create hỗ trợ file trong chuỗi thư mục con chưa tồn tại. Từng segment được tạo và kiểm tra
+  lại boundary, loại file, symlink/reparse point trước khi ghi.
 - Proposal lưu expected SHA-256; stale source và create conflict bị từ chối.
 - Trước replace, file được mở với `O_NOFOLLOW` khi nền tảng hỗ trợ; kiểm tra regular file,
   link count, inode/device và content hash. Hash được kiểm tra lại sau khi file tạm đã fsync,
@@ -89,11 +97,14 @@ Phase 3 đã được phê duyệt.
 - Cấu hình mới: `agent.max_input_tokens=32768` và
   `agent.reserved_output_tokens=4096`.
 - Character limits Phase 2 vẫn là lớp giới hạn bổ sung.
-- Ước lượng fallback dùng số byte UTF-8 chia ba và luôn ghi nhận `exact=false`.
+- Ước lượng fallback dùng số byte UTF-8 chia ba và luôn ghi nhận `exact=false`. Heuristic này
+  không phản ánh chính xác tokenizer và có thể sai khác đáng kể với Unicode, chuỗi escape,
+  source code hoặc phiên bản model khác nhau.
 - Chỉ gọi token-count API khi estimate vượt 75% input capacity để giảm request không cần
   thiết.
-- Exact count nếu có được ghi `exact=true`. Nếu count API lỗi, fallback không bị trình bày
-  như số đo chính xác.
+- Exact count nếu có được ghi `exact=true`. Khi estimate đạt từ 75% input capacity mà exact
+  counter thiếu, lỗi hoặc không trả kết quả, request bị từ chối bằng
+  `TOKEN_COUNT_UNAVAILABLE_NEAR_LIMIT`; không tin vào estimate ở vùng sát giới hạn.
 - Oversize bị từ chối trước generation; Phase 3 chưa làm session compaction/accounting đầy
   đủ của Phase 6.
 
@@ -120,20 +131,35 @@ Phase 3 đã được phê duyệt.
 | Kiểm tra | Trạng thái | Kết quả |
 |---|---|---|
 | `uv sync` | PASS | Resolve 41 package, check 41 package, không đổi dependency |
-| `uv run pytest -q -rs` | PASS | **186 passed in 17.21s**, 0 fail, 0 skip |
+| `uv run pytest -q -rs` | PASS | **196 passed in 4.63s**, 0 fail, 0 skip |
 | `uv run ruff check .` | PASS | `All checks passed!` |
 | `git diff --check` | PASS | Không có lỗi whitespace |
 | Docker smoke lần cuối | PASS | Docker thật, non-root, network disabled, `codepilot-smoke-ok` |
 | Isolated patch tests | PASS | traversal, symlink, stale/conflict, denial/replay, concurrent apply, Host unchanged |
 | Gemini mocked function calls | PASS | tool selection, structured calls/responses, malformed/unknown call, step budget |
-| Gemini live text | FAIL | `TIMEOUT_ERROR`; không nhận response trong timeout cấu hình |
-| Gemini live function calling | NOT VERIFIED | CLI live kết thúc bằng `TIMEOUT_ERROR` trước tool call |
+| Gemini live CLI | FAIL | `PROVIDER_ERROR`; provider không trả turn thành công |
+| Gemini live function calling | NOT VERIFIED | CLI live lỗi `PROVIDER_ERROR` trước khi quan sát được tool call |
+| Secret scan của changed diff | PASS | Không phát hiện chuỗi credential-like; không có `.env` thật được track |
 
 Docker daemon ban đầu có một lần unavailable và smoke trả FAIL đúng chính sách, không chạy
-Host fallback. Lần chạy cuối và integration test Docker trong full suite đều PASS.
+Host fallback. Lần chạy cuối trả `codepilot-smoke-ok`, xác nhận non-root và network disabled;
+integration test Docker trong full suite cũng PASS.
 
-Không đọc hoặc in API key. Chỉ kiểm tra boolean rằng credential đã được cấu hình trước live
-test. Provider error/log chỉ chứa mã lỗi an toàn.
+Không đọc hoặc in API key. Provider error/log chỉ chứa mã lỗi an toàn.
+
+### 9.1. Bằng chứng sửa review F-001 đến F-004
+
+- **F-001:** test hồi quy trước bản sửa chứng minh có thể mutate nested
+  `PendingAction.action.arguments` để làm approval lệch khỏi content thực thi; test thứ hai
+  chứng minh mutation sau `consume()` từng có thể đổi nội dung ghi. Snapshot canonical và
+  snapshot proposal hiệu lực hiện chặn cả hai đường này.
+- **F-002:** sau patch, message `STALE_AFTER_PATCH` chỉ rõ path bị stale thay vì ngầm dùng
+  context cũ. Integration test xác nhận call `read_file` kế tiếp thấy source mới.
+- **F-003:** test Unicode zero-width joiner, CJK, escape-heavy input và tool schema lớn xác
+  nhận fail closed khi exact counter không khả dụng gần giới hạn; exact count vượt giới hạn
+  vẫn bị từ chối.
+- **F-004:** test tạo thành công `new/package/module.py`, Host không đổi; traversal hiện có
+  vẫn bị chặn và symlink được chèn sau proposal bị từ chối bằng `UNSAFE_TARGET`.
 
 ## 10. Git status và commits
 
@@ -149,6 +175,10 @@ e97cafd feat(llm): expose validated Gemini function calls
 4d7781b feat(agent): orchestrate bounded tool calling
 d4ebab2 feat(cli): support interactive patch approval
 ad0a77f docs(agent): document editing workflow and review evidence
+abca9f5 docs(report): record functional commit history
+8a24bcc fix(patch): harden approved nested patch application
+59bfd3f fix(agent): mark patched repository context stale
+8189fe0 fix(context): fail closed near uncertain token limits
 ```
 
 Commit cập nhật metadata báo cáo sau danh sách trên được ghi trong phần bàn giao cuối.
@@ -172,9 +202,11 @@ Commit cập nhật metadata báo cáo sau danh sách trên được ghi trong p
 
 ## 12. Giới hạn đã biết
 
-- Live Gemini tool calling chưa xác minh vì request kết thúc bằng `TIMEOUT_ERROR`; không báo
-  PASS và không suy đoán quota/model/provider state.
-- Fallback token count là ước lượng bảo thủ cục bộ, không phải exact tokenizer measurement.
+- Live Gemini tool calling chưa xác minh. Lần smoke trước kết thúc bằng `TIMEOUT_ERROR`; lần
+  smoke cho review fix trả `PROVIDER_ERROR` trước tool call. Không báo PASS và không suy đoán
+  quota/model/provider state.
+- Fallback token count là ước lượng bảo thủ cục bộ, không phải exact tokenizer measurement;
+  request gần giới hạn cần exact count và sẽ fail closed nếu provider không đếm được.
 - Phase 3 chỉ tạo một action cho một file; chưa hỗ trợ transaction nhiều file.
 - Bản sao cô lập gồm text UTF-8/UTF-8 BOM được policy cho phép; binary và file bị loại không
   được patch.
@@ -188,6 +220,6 @@ Commit cập nhật metadata báo cáo sau danh sách trên được ghi trong p
 
 ## 13. Yêu cầu review
 
-Nhờ reviewer kiểm tra các ranh giới model → validation → permission → isolated patch, token
-budget, lifecycle của approval và giới hạn TOCTOU đã công khai. Phase 3 dừng tại đây để chờ
-code review và quyết định của Project Owner; không bắt đầu Phase 4.
+Nhờ reviewer kiểm tra lại F-001 đến F-004, đặc biệt snapshot approval/proposal, stale-context
+notification, fail-closed token budget và nested create. Phase 3 dừng tại đây để chờ code
+review và quyết định của Project Owner; không bắt đầu Phase 4.
