@@ -1,8 +1,8 @@
 
 # CODEPILOT HARNESS — KẾ HOẠCH TRIỂN KHAI
 
-> **Trạng thái:** Phase 1 APPROVED; Phase 2 đã triển khai, chờ review
-> **Phase được phép triển khai:** Phase 2 (CP-007 đến CP-011)
+> **Trạng thái:** Phase 1 và Phase 2 APPROVED; Phase 3 đã triển khai, chờ review
+> **Phase được phép triển khai:** Phase 3 (CP-012 đến CP-016)
 > **Kiến trúc:** Modular Monolith
 > **Thời gian dự kiến:** 8 tuần
 > **Người triển khai:** Codex
@@ -50,11 +50,11 @@ Codex PHẢI:
 
 Codex KHÔNG ĐƯỢC:
 
-- Tự động triển khai Phase 3–8.
+- Tự động triển khai Phase 4–8.
 - Tự thay đổi các quyết định kiến trúc.
 - Hardcode API key hoặc secrets.
 - Bỏ qua test để báo hoàn thành.
-- Tự động push hoặc merge code.
+- Tự động merge code; việc commit/push bàn giao tuân theo `AGENTS.md` mới nhất.
 - Chạy code không đáng tin cậy trực tiếp trên Host.
 - Bỏ qua Permission Engine.
 - Tự ý sửa các file ngoài phạm vi task.
@@ -1028,13 +1028,13 @@ CANCELLED
 
 ## Acceptance Criteria
 
-- [ ] Agent gọi được tools.
-- [ ] Arguments sai bị từ chối.
-- [ ] Write cần approval.
-- [ ] Có thể sửa sandbox workspace.
-- [ ] Host repository không thay đổi.
-- [ ] Giới hạn Agent steps.
-- [ ] State transitions chính xác.
+- [x] Agent gọi được tools qua deterministic mock; live Gemini chưa xác minh do timeout.
+- [x] Arguments sai bị từ chối.
+- [x] Write cần approval.
+- [x] Có thể sửa isolated workspace.
+- [x] Host repository không thay đổi.
+- [x] Giới hạn Agent steps.
+- [x] State transitions chính xác.
 
 ## Tests
 
@@ -1163,6 +1163,11 @@ Không triển khai Phase 5 nếu chưa được duyệt.
 
 Tăng cường bảo mật Docker và triển khai cơ chế áp dụng thay đổi lên Host.
 
+## Cải tiến đã hoãn từ review trước
+
+- Cô lập AST worker mạnh hơn với giới hạn CPU, bộ nhớ và timeout có thể cưỡng chế.
+- Hardening đối kháng cho filesystem race và symlink-swap.
+
 ## Dependencies
 
 - Phase 4 đã được phê duyệt.
@@ -1239,6 +1244,10 @@ Không chuyển sang Phase 6 nếu còn lỗi Critical hoặc High.
 ## Mục tiêu
 
 Cho phép Agent xử lý task dài, lưu session và tiếp tục công việc sau khi gián đoạn.
+
+## Cải tiến đã hoãn từ review trước
+
+- Hoàn thiện token accounting và quản lý budget ở cấp session.
 
 ## Dependencies
 
@@ -1318,6 +1327,10 @@ Review persistence consistency, recovery và context quality.
 ## Mục tiêu
 
 Đánh giá hiệu quả Coding Agent bằng bộ benchmark có thể tái lập.
+
+## Cải tiến đã hoãn từ review trước
+
+- Benchmark heuristic retrieval với semantic/hybrid retrieval bằng Recall@K, MRR, latency và token cost.
 
 ## Dependencies
 

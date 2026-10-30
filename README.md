@@ -151,10 +151,10 @@ Planned commands:
 | `/exit` | Exit the CLI |
 | `/approve` | Approve a pending action |
 | `/deny` | Reject a pending action |
+| `/cancel` | Cancel the active or pending task |
 
-`/approve` and `/deny` become functional when the permission workflow is implemented.
-
-Phase 1 only requires `/help`, `/status`, and `/exit`.
+`/approve` chỉ chấp nhận action đang chờ với đúng tool, arguments, target và operation.
+Approval chỉ dùng một lần; `/deny` và `/cancel` không ghi file.
 
 ### 5.2 Agent Loop
 
@@ -559,8 +559,10 @@ Current status:
 - Discussions 1–4: Completed.
 - Architecture decisions: Approved.
 - Documentation: Prepared.
-- Phase 1 implementation: Not started.
-- Phase 2–8: Planned only.
+- Phase 1 implementation: Approved.
+- Phase 2 implementation: Approved.
+- Phase 3 implementation: Authorized; awaiting implementation review.
+- Phase 4–8: Locked until separately authorized.
 
 The implementation must follow `IMPLEMENTATION_PLAN.md`.
 

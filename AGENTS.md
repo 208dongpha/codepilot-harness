@@ -70,29 +70,29 @@ CodePilot Harness follows an eight-phase implementation plan.
 
 **Phase 1 — Foundation and Runtime: APPROVED**
 
-**Phase 2 — Repository Exploration: AUTHORIZED**
+**Phase 2 — Repository Exploration: APPROVED**
 
-Authorized Phase 2 tasks:
+**Phase 3 — Agent Loop & Editing: AUTHORIZED**
 
-- CP-007: Tool Registry.
-- CP-008: File Tools.
-- CP-009: Code Search.
-- CP-010: Repository Map.
-- CP-011: Context Builder.
+Authorized Phase 3 tasks:
 
-**Phase 3–8: LOCKED**
+- CP-012: Agent State Machine.
+- CP-013: Agent Loop.
+- CP-014: Permission Engine.
+- CP-015: Patch Tool.
+- CP-016: CLI Approval.
+
+**Phase 4–8: LOCKED**
 
 ### Scope Restrictions
 
-During Phase 2:
+During Phase 3:
 
-- Implement repository exploration and read-only tooling.
-- Maintain compatibility with Phase 1 components.
-- Do not implement an autonomous Agent Loop.
-- Do not implement code editing or patch application.
-- Do not implement automatic tool calling by the LLM.
-- Do not introduce self-correction or autonomous execution workflows.
-- Do not begin Phase 3 without explicit authorization.
+- Implement the bounded Agent Loop, exact-action permissions, isolated patching, and CLI approval.
+- Maintain compatibility with Phase 1 and Phase 2 components.
+- Do not apply patches to the Host repository.
+- Do not implement automated verification, self-correction, persistence, or semantic retrieval.
+- Do not begin Phase 4 without explicit authorization.
 
 Phase-specific authorization must be updated when the Project Owner approves the next phase.
 
@@ -431,9 +431,9 @@ Project Owner đã cấp quyền thường trực cho **toàn bộ dự án**, �
 
 At the end of each authorized phase, produce an implementation report.
 
-For Phase 2, create:
+For Phase 3, create:
 
-`docs/PHASE_2_IMPLEMENTATION_REPORT.md`
+`docs/PHASE_3_IMPLEMENTATION_REPORT.md`
 
 ### Required Report Sections
 
