@@ -138,8 +138,20 @@ test. Provider error/log chỉ chứa mã lỗi an toàn.
 ## 10. Git status và commits
 
 Làm trực tiếp trên `main`, không tạo branch, không force push và không rewrite history.
-Các commit được tạo theo từng chức năng sau verification cuối; hash thực tế được báo trong
-phần bàn giao và có thể xem bằng `git log origin/main..HEAD` trước khi push.
+Các commit chức năng đã tạo:
+
+```text
+d271004 feat(agent): implement bounded state transitions
+1931d7d feat(permissions): enforce single-use exact action approvals
+f05bc17 feat(patch): apply approved changes in isolated workspaces
+d1ecb7d feat(context): enforce token-aware generation budgets
+e97cafd feat(llm): expose validated Gemini function calls
+4d7781b feat(agent): orchestrate bounded tool calling
+d4ebab2 feat(cli): support interactive patch approval
+ad0a77f docs(agent): document editing workflow and review evidence
+```
+
+Commit cập nhật metadata báo cáo sau danh sách trên được ghi trong phần bàn giao cuối.
 
 ## 11. Acceptance criteria
 
