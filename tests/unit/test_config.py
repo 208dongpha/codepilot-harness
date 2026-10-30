@@ -7,7 +7,10 @@ from codepilot.config import ConfigurationError, load_config
 
 def test_load_valid_config():
     Path("codepilot.toml").write_text('[llm]\nmodel="gemini-test"')
-    assert load_config().llm.model == "gemini-test"
+    config = load_config()
+    assert config.llm.model == "gemini-test"
+    assert config.agent.max_input_tokens == 32768
+    assert config.agent.reserved_output_tokens == 4096
 
 
 def test_environment_override(monkeypatch):
@@ -27,6 +30,7 @@ def test_environment_override(monkeypatch):
         '[llm]\nmodel=""',
         "[sandbox]\nnetwork_enabled=true",
         "[agent]\nmax_steps=0",
+        "[agent]\nmax_input_tokens=1024\nreserved_output_tokens=1024",
         'api_key="secret"',
     ],
 )

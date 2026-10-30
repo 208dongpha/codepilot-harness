@@ -6,6 +6,8 @@ temperature = 0.2
 [agent]
 max_steps = 20
 max_verification_retries = 3
+max_input_tokens = 32768
+reserved_output_tokens = 4096
 
 [permissions]
 mode = "ask_before_write"

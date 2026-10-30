@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import dotenv_values
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, model_validator
 
 
 class ConfigurationError(ValueError):
@@ -39,6 +39,14 @@ class LLMConfig(Section):
 class AgentConfig(Section):
     max_steps: int = Field(default=20, gt=0)
     max_verification_retries: int = Field(default=3, ge=0, le=3)
+    max_input_tokens: int = Field(default=32768, ge=1024)
+    reserved_output_tokens: int = Field(default=4096, ge=256)
+
+    @model_validator(mode="after")
+    def validate_token_reserve(self):
+        if self.reserved_output_tokens >= self.max_input_tokens:
+            raise ValueError("Reserved output tokens must be below the total token budget.")
+        return self
 
 
 class PermissionsConfig(Section):
