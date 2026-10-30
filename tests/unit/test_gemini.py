@@ -14,7 +14,10 @@ from codepilot.llm.gemini import GeminiProvider
 def client():
     with patch("codepilot.llm.gemini.genai.Client") as factory:
         client = factory.return_value
-        client.aio.models.generate_content = AsyncMock(return_value=SimpleNamespace(text=" hello "))
+        client.aio.models.generate_content = AsyncMock(
+            return_value=SimpleNamespace(text=" hello ", candidates=[])
+        )
+        client.aio.models.count_tokens = AsyncMock(return_value=SimpleNamespace(total_tokens=12))
         client.aio.aclose = AsyncMock()
         yield client
 
@@ -64,6 +67,29 @@ async def test_empty_response(client):
         await GeminiProvider(
             Config(api_key=SecretStr("fixture"), llm=LLMConfig(model="gemini-test"))
         ).generate([])
+
+
+async def test_manual_function_calling_and_token_count(client):
+    from google.genai import types
+
+    part = types.Part(
+        function_call=types.FunctionCall(id="call-1", name="read_file", args={"path": "a.py"})
+    )
+    client.aio.models.generate_content.return_value = SimpleNamespace(
+        text=None,
+        candidates=[SimpleNamespace(content=SimpleNamespace(parts=[part]))],
+    )
+    provider = GeminiProvider(
+        Config(api_key=SecretStr("fixture"), llm=LLMConfig(model="gemini-test"))
+    )
+    tools = [{"name": "read_file", "description": "Read", "parameters": {"type": "object"}}]
+    turn = await provider.generate_turn([{"role": "user", "content": "read"}], tools)
+    assert turn.tool_calls[0].name == "read_file"
+    config = client.aio.models.generate_content.call_args.kwargs["config"]
+    assert config.automatic_function_calling.disable is True
+    declaration = config.tools[0].function_declarations[0]
+    assert declaration.parameters_json_schema == {"type": "object"}
+    assert await provider.count_tokens([{"role": "user", "content": "read"}], tools) == 12
 
 
 async def test_placeholder_model():

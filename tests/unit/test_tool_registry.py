@@ -13,6 +13,8 @@ def test_registry_validates_and_rejects_unknown():
     registry = ToolRegistry()
     registry.register(ReadOnlyTool("read_file", Args, lambda args: {"path": args.path}))
     assert registry.names == ("read_file",)
+    assert registry.declarations[0]["name"] == "read_file"
+    assert registry.declarations[0]["parameters"]["required"] == ["path"]
     assert registry.call("read_file", {"path": "a.py"}).data == {"path": "a.py"}
     assert registry.call("nope", {}).error == "UNKNOWN_TOOL"
     for args in ({}, {"path": 1}, {"path": "x", "extra": True}):

@@ -27,6 +27,17 @@ class ToolRegistry:
     def names(self) -> tuple[str, ...]:
         return tuple(sorted(self._tools))
 
+    @property
+    def declarations(self) -> list[dict[str, object]]:
+        return [
+            {
+                "name": name,
+                "description": f"Read-only repository tool: {name}",
+                "parameters": self._tools[name].arguments.model_json_schema(),
+            }
+            for name in sorted(self._tools)
+        ]
+
     def call(self, name: str, arguments: dict[str, object]) -> ToolResult:
         tool = self._tools.get(name)
         if tool is None:
