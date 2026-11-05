@@ -1,7 +1,7 @@
 # Báo cáo triển khai Phase 4 — Verification & Recovery
 
 > **Phạm vi:** chỉ CP-017 đến CP-021.
-> **Trạng thái:** Đã sửa finding CP-018 (symlink fail-closed); xác minh độc lập trước đó ghi nhận 3 lỗi Docker CLI timeout; đang chờ Architect / Reviewer review lại.
+> **Trạng thái:** Đã sửa finding CP-018 (symlink và skipped-entry fail-closed); xác minh độc lập trước đó ghi nhận 3 lỗi Docker CLI timeout; đang chờ Architect / Reviewer review lại.
 > **Phê duyệt phase:** Không tự khẳng định. Chỉ Project Owner được phê duyệt phase.
 
 ## 1. Tóm tắt
@@ -32,9 +32,9 @@ không có session persistence.
 | CP-020 — Self-Correction | Đã triển khai | Gửi bằng chứng test đã redact lại cho model, theo dõi repair attempts, cho phép tối đa 3 lần retry, lưu verification history và dừng khi hết budget hoặc gặp thay đổi không an toàn. |
 | CP-021 — Task Report | Đã triển khai | Báo cáo verdict, changed files, test executions, verification attempts, retry count và remaining issues; CLI render bản tóm tắt có giới hạn. |
 
-Ghi chú: phần triển khai code của CP-017 đến CP-021 đã hoàn tất; finding CP-018 về symlink đã
-được sửa (mục 6.5); kết quả xác minh Docker độc lập của Reviewer bị lỗi timeout và được ghi nhận
-riêng tại mục 6, không được tính là PASS.
+Ghi chú: phần triển khai code của CP-017 đến CP-021 đã hoàn tất; finding CP-018 về symlink và
+skipped entry đã được sửa (mục 6.5, 6.6); kết quả xác minh Docker độc lập của Reviewer bị lỗi
+timeout và được ghi nhận riêng tại mục 6, không được tính là PASS.
 
 ## 3. Các chức năng đã triển khai
 
@@ -79,6 +79,9 @@ riêng tại mục 6, không được tính là PASS.
   incomplete nếu có linked path; `GitDiffVerifier` thêm policy `LINKED_ENTRY_DETECTED`, đánh dấu
   diff incomplete và báo path link như unauthorized binary change; `VerificationEngine` trả
   `FAIL` non-retryable, không thể PASS với symlink không được báo cáo.
+- **Review fix 2 CP-018:** `WorkspaceSnapshot.capture` và `GitDiffVerifier.compare` coi
+  `listing.skipped > 0` là bằng chứng incomplete; không follow path không chắc chắn và không thể
+  PASS khi enumeration/read bị skip.
 
 ### 3.3 Các verdict xác minh (CP-019)
 
@@ -205,8 +208,10 @@ báo cáo **không tuyên bố PASS** cho `uv run pytest -q`. Trong bộ test hi
 |---|---|---|
 | `uv sync` | PASS | Resolved 41 packages, checked 41 packages |
 | `uv run pytest -q` (full suite, trước review fix CP-018) | **249 passed, 6 skipped** | Hai lần chạy: 99.88s và 74.25s; 6 skipped là ripgrep; Docker integration chạy và pass trong các lần này |
-| `uv run pytest -q` (full suite, sau review fix CP-018) | **253 passed, 6 skipped** trong 29.11s | 6 skipped là ripgrep; 4 test symlink mới đã chạy và pass; Docker integration pass trong lần này |
-| Focused regression tests: `tests/unit/test_verification_diff.py`, `tests/unit/test_verification_engine.py`, `tests/unit/test_file_tools.py`, `tests/unit/test_context_builder.py`, `tests/unit/test_repository_map.py` | **95 passed** trong 1.67s | Bao gồm symlink added/replaced và engine fail-closed; symlink tạo được trên môi trường hiện tại |
+| `uv run pytest -q` (full suite, sau symlink fix) | **253 passed, 6 skipped** trong 29.11s | 6 skipped là ripgrep; 4 test symlink mới đã chạy và pass; Docker integration pass trong lần này |
+| `uv run pytest -q` (full suite, sau skipped-entry fix) | **255 passed, 6 skipped** trong 25.97s | 6 skipped là ripgrep; 2 test skipped-entry mới đã chạy và pass; Docker integration pass trong lần này |
+| Focused verification tests sau skipped-entry fix: `tests/unit/test_verification_diff.py`, `tests/unit/test_verification_engine.py` | **23 passed** trong 0.98s | Bao gồm symlink và skipped baseline/current tests |
+| Focused regression set rộng hơn | **97 passed** trong 1.89s | Gồm verification, file tools, context builder và repository map |
 | Docker-focused retest: `tests/integration/test_verification_docker.py` + `tests/integration/test_docker.py` | **3 failed / 4 passed** trong 139.19s | Tái hiện 3 lỗi timeout; gồm `test_real_test_runner_runs_in_docker_with_security_limits`, `test_real_recovery_workflow_fails_then_repairs_and_passes` và `test_real_docker_smoke` |
 | `uv run codepilot sandbox smoke-test` | PASS (lần chạy trước) | Docker available, image ready, network disabled, non-root |
 | `uv run ruff check .` | PASS | `All checks passed!` |
@@ -214,11 +219,11 @@ báo cáo **không tuyên bố PASS** cho `uv run pytest -q`. Trong bộ test hi
 | `uv run codepilot --help` | PASS | CLI entry point render được |
 
 Lần full suite **249 passed, 6 skipped** xảy ra ngay sau lần Docker-focused retest thất bại; lần
-chạy lại sau khi cập nhật báo cáo cũng cho **249 passed, 6 skipped** trong 74.25s. Sau review fix
-CP-018, full suite cho **253 passed, 6 skipped** trong 29.11s (thêm 4 regression test symlink).
-Các kết quả này cho thấy lỗi timeout của Docker CLI không ổn định theo môi trường; chúng **không
-thay thế** kết quả FAIL độc lập của Reviewer và không được dùng để tuyên bố PASS cho xác minh
-Docker.
+chạy lại sau khi cập nhật báo cáo cũng cho **249 passed, 6 skipped** trong 74.25s. Sau symlink fix,
+full suite cho **253 passed, 6 skipped** trong 29.11s; sau skipped-entry fix, full suite cho
+**255 passed, 6 skipped** trong 25.97s (thêm 6 regression test CP-018). Các kết quả này cho thấy
+lỗi timeout của Docker CLI không ổn định theo môi trường; chúng **không thay thế** kết quả FAIL độc
+lập của Reviewer và không được dùng để tuyên bố PASS cho xác minh Docker.
 
 ### 6.3 Phạm vi của Docker integration suite
 
@@ -238,12 +243,13 @@ Bộ test Docker bao phủ:
 Docker Desktop/Docker CLI trong môi trường này có lúc timeout ở `docker create`, `docker inspect`
 hoặc `docker start --attach`, kể cả với smoke test có từ Phase 1. Reviewer ghi nhận
 **3 failed / 246 passed / 6 skipped**; implementer tái hiện **3 failed / 4 passed** trong
-Docker-focused retest. Sau review fix CP-018, full suite pass **253 passed / 6 skipped** trong
-29.11s.
+Docker-focused retest. Sau các fix CP-018, full suite pass **255 passed / 6 skipped** trong
+25.97s.
 
-Các timeout Docker không tái hiện được như một lỗi logic triển khai; finding CP-018 là lỗi logic
-tái lập được và đã được sửa riêng (mục 6.5). Trạng thái Docker integration vẫn được ghi nhận là
-**environment-blocked/failed**, không phải PASS. Khi Docker engine ổn định, cần chạy lại:
+Các timeout Docker không tái hiện được như một lỗi logic triển khai; các finding CP-018 là lỗi
+logic tái lập được và đã được sửa riêng (mục 6.5 và 6.6). Trạng thái Docker integration vẫn được
+ghi nhận là **environment-blocked/failed**, không phải PASS. Khi Docker engine ổn định, cần chạy
+lại:
 
 ```powershell
 docker build -f docker/Dockerfile.sandbox -t codepilot-sandbox:phase1 docker
@@ -272,8 +278,32 @@ entries, nên verifier có thể PASS với một symlink không được báo c
 - Test symlink chỉ skip nếu OS không tạo được symlink; trên môi trường hiện tại các test này đã
   chạy và pass.
 
-**Evidence:** focused tests **95 passed** trong 1.67s; full suite sau fix **253 passed, 6 skipped**
-trong 29.11s; commit `84afb04 fix(verification): fail closed on linked sandbox entries`.
+**Evidence:** focused regression set **97 passed** trong 1.89s; full suite sau symlink fix
+**253 passed, 6 skipped** trong 29.11s; sau skipped-entry fix **255 passed, 6 skipped** trong
+25.97s; commit `84afb04 fix(verification): fail closed on linked sandbox entries`.
+
+### 6.6 Bản sửa review 2 CP-018 — skipped entries fail closed
+
+**Finding:** `Workspace.list_files` expose `skipped`, nhưng `WorkspaceSnapshot.capture` và
+`GitDiffVerifier.compare` không fail closed khi `listing.skipped > 0`. Enumeration/read race hoặc
+một entry không truy cập được có thể làm evidence incomplete trong khi verifier vẫn PASS.
+
+**Fix:**
+
+- `WorkspaceSnapshot.capture` đánh dấu baseline `complete=False` khi `listing.skipped > 0`.
+- `GitDiffVerifier.compare` đánh dấu `enumeration_complete=False` khi `listing.skipped > 0`.
+- Không follow path không chắc chắn; baseline/current diff incomplete dẫn tới
+  `VerificationEngine` trả `INCONCLUSIVE` với `DIFF_INCOMPLETE` (hoặc policy/unauthorized
+  `FAIL` nếu có bằng chứng khác), không thể PASS.
+- Regression tests:
+  - `test_skipped_baseline_entries_are_inconclusive`
+  - `test_skipped_current_entries_are_inconclusive`
+- Các test mô phỏng `FileListing(..., skipped=1)` ở baseline và ở lần verification hiện tại,
+  với fake runner trả test exit code 0; kết quả vẫn là `INCONCLUSIVE`, không phải `PASS`.
+
+**Evidence:** focused verification tests **23 passed** trong 0.98s; broader focused set
+**97 passed** trong 1.89s; full suite sau fix **255 passed, 6 skipped** trong 25.97s; commit
+`cf3de36 fix(verification): fail closed on skipped sandbox entries`.
 
 ## 7. Kiểm tra bảo mật
 
@@ -291,6 +321,7 @@ trong 29.11s; commit `84afb04 fix(verification): fail closed on linked sandbox e
 | Secret không lộ trong output/report | PASS (unit) với giới hạn redaction theo pattern | `SECRET_CONTENT` redaction, bounded output, không log raw output |
 | Phát hiện thay đổi sandbox unauthorized | PASS (unit) | Baseline comparison và approved content hash; thay đổi không an toàn dừng task |
 | Symlink/reparse point không bị bỏ qua | PASS (unit) | `FileListing.linked_paths`; `LINKED_ENTRY_DETECTED`; regression tests symlink added/replaced và engine fail-closed |
+| Skipped entry không tạo PASS | PASS (unit) | `listing.skipped > 0` làm baseline/current diff incomplete; regression tests skipped baseline/current trả `INCONCLUSIVE` |
 | Giữ nguyên permission boundary | PASS | Patch vẫn cần approval chính xác; verification không tự approve ghi |
 | Không triển khai host patch application của Phase 5 | PASS | Không thêm host-write path |
 
@@ -322,11 +353,13 @@ d6e500f feat(report): summarize task verification evidence
 b7741df test(verification): cover docker execution and recovery workflow
 362fecb docs(report): record phase 4 verification and recovery
 84afb04 fix(verification): fail closed on linked sandbox entries
+cf3de36 fix(verification): fail closed on skipped sandbox entries
 ```
 
 Commit cập nhật báo cáo tiếng Việt này sẽ được tạo sau khi hoàn tất kiểm tra; hash sẽ được nêu
-trong handoff cuối. Lượt cập nhật báo cáo chỉ sửa `docs/PHASE_4_IMPLEMENTATION_REPORT.md`; code
-fix CP-018 nằm trong commit `84afb04`, không có thay đổi application code nào khác.
+trong handoff cuối. Lượt cập nhật báo cáo chỉ sửa `docs/PHASE_4_IMPLEMENTATION_REPORT.md`; các
+code fix CP-018 nằm trong commit `84afb04` và `cf3de36`, không có thay đổi application code nào
+khác.
 
 Việc triển khai thêm 8 module source dưới `src/codepilot/verification/` cùng các thay đổi tập
 trung ở agent loop, CLI, configuration, Docker runtime, Dockerfile, telemetry event list và test.
@@ -342,13 +375,14 @@ Không sửa file ngoài phạm vi Phase 4.
 | Retry limit được áp dụng | PASS (unit) | Tối đa 3 repair; có test exhaustion |
 | Unauthorized changes được phát hiện | PASS (unit) | Diff/engine/loop tests |
 | Symlink/reparse point không bị bỏ qua | PASS (unit) | `LINKED_ENTRY_DETECTED`; symlink added/replaced tests; engine FAIL non-retryable |
+| Skipped/inaccessible entry không tạo PASS | PASS (unit) | Baseline/current `listing.skipped > 0` -> `INCONCLUSIVE`/`DIFF_INCOMPLETE`; regression tests |
 | Verification không dựa hoàn toàn vào lời LLM | PASS (unit/architecture) | Harness chạy test và tự tính diff/verdict |
 | Timeout được áp dụng | PASS (unit) / NOT VERIFIED (Docker runtime) | Unit timeout pass; Docker timeout test bị CLI timeout trong lần Reviewer |
 | Output limit được áp dụng | PASS (unit) | Bounded buffer và redaction tests |
 | Container cleanup được xác minh | PASS (unit) / NOT VERIFIED (Docker runtime) | Unit cleanup pass; Docker runtime timeout trong lần Reviewer |
 | Không fallback sang Host | PASS (unit) | Unit test xác nhận chỉ có lệnh `docker` |
 | Task report được tạo | PASS (unit/CLI) | Model, builder, CLI rendering và fallback report tests |
-| Docker integration trong full suite của Reviewer | **FAIL** | **3 failed / 246 passed / 6 skipped**; full suite sau fix của implementer pass **253 passed / 6 skipped** nhưng không thay thế kết quả Reviewer |
+| Docker integration trong full suite của Reviewer | **FAIL** | **3 failed / 246 passed / 6 skipped**; full suite sau các fix CP-018 của implementer pass **255 passed / 6 skipped** nhưng không thay thế kết quả Reviewer |
 | Phase 4 được chấp nhận | PENDING | Cần Project Owner phê duyệt sau review |
 
 ## 10. Giới hạn đã biết và vấn đề chưa giải quyết
@@ -356,10 +390,10 @@ Không sửa file ngoài phạm vi Phase 4.
 1. **Docker Desktop/Docker CLI không ổn định trong môi trường này.** Reviewer ghi nhận
    `uv run pytest -q` FAIL với **3 failed / 246 passed / 6 skipped**; 3 lỗi là Docker integration
    test timeout trong Docker CLI. Implementer tái hiện **3 failed / 4 passed** trong
-   Docker-focused retest; sau review fix CP-018, full suite pass **253 passed / 6 skipped**.
-   Vì lỗi không tất định và smoke test có từ Phase 1 cũng từng timeout, trạng thái Docker
-   integration vẫn được ghi là environment-blocked/failed, không phải PASS. Khi Docker engine ổn
-   định, cần rebuild image và chạy lại:
+   Docker-focused retest; sau các fix CP-018, full suite pass **255 passed / 6 skipped**. Vì lỗi
+   không tất định và smoke test có từ Phase 1 cũng từng timeout, trạng thái Docker integration vẫn
+   được ghi là environment-blocked/failed, không phải PASS. Khi Docker engine ổn định, cần rebuild
+   image và chạy lại:
    `docker build -f docker/Dockerfile.sandbox -t codepilot-sandbox:phase1 docker`.
 2. **Dependency của sandbox image.** Image có Python và pytest, không có runtime dependency của
    project. Test command cần package bên thứ ba phải dùng image được build riêng hoặc dependency
@@ -388,6 +422,9 @@ Không sửa file ngoài phạm vi Phase 4.
     10001 trong khi isolated workspace chỉ root truy cập được. Có thể cần điều chỉnh permission;
     môi trường Windows/Docker Desktop hiện tại có lúc chạy được nhưng lần Reviewer bị timeout.
     Đây là giới hạn portability/môi trường, không phải host-fallback path.
+11. **Fail closed khi có skipped entry.** Bất kỳ entry nào bị skip do permission, race hoặc giới
+    hạn enumeration đều làm verification `INCONCLUSIVE`. Đây là hành vi an toàn theo yêu cầu,
+    nhưng có thể giảm tỷ lệ PASS trên filesystem có entry không truy cập được.
 
 ## 11. Yêu cầu review
 
@@ -397,13 +434,13 @@ Vui lòng review:
    và hành vi không fallback sang Host.
 2. `src/codepilot/verification/diff.py`, `src/codepilot/tools/workspace.py` và `engine.py` về
    baseline trust, phát hiện thay đổi unauthorized, thứ tự ưu tiên policy, xử lý `INCONCLUSIVE`
-   và fix CP-018 fail-closed cho symlink/reparse point.
+   và các fix CP-018 fail-closed cho symlink/reparse point và skipped entry.
 3. `src/codepilot/agent/loop.py` về retry budget, state transition, theo dõi approved hash và lưu
    giữ bằng chứng.
 4. `src/codepilot/verification/report.py` và `cli/main.py` về độ đầy đủ của report và render an
    toàn.
-5. Regression tests symlink added/replaced và engine fail-closed; bảo đảm test skip chỉ khi OS
-   không tạo được symlink.
+5. Regression tests symlink added/replaced, skipped baseline/current và engine fail-closed; bảo
+   đảm test skip chỉ khi OS không tạo được symlink.
 6. Test coverage và giới hạn môi trường Docker đã ghi nhận ở trên, đặc biệt 3 lỗi Docker CLI
    timeout trong lần xác minh độc lập của Reviewer.
 
