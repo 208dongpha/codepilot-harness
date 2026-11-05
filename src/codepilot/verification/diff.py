@@ -33,7 +33,7 @@ class WorkspaceSnapshot:
         listing = workspace.list_files()
         contents: dict[str, str] = {}
         total = 0
-        complete = not listing.truncated and not listing.linked_paths
+        complete = not listing.truncated and not listing.linked_paths and listing.skipped == 0
         for path in listing.paths:
             try:
                 text = workspace.read_text(path)
@@ -103,7 +103,11 @@ class GitDiffVerifier:
             current[path] = text
 
         enumeration_complete = (
-            not listing.truncated and not unknown and not size_exceeded and not linked
+            not listing.truncated
+            and not unknown
+            and not size_exceeded
+            and not linked
+            and listing.skipped == 0
         )
         changes: list[FileChange] = []
         diff_parts: list[str] = []

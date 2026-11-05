@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from codepilot.config import RepositoryConfig
-from codepilot.tools.workspace import Workspace
+from codepilot.tools.workspace import FileListing, Workspace
 from codepilot.verification.diff import GitDiffVerifier
 from codepilot.verification.engine import VerificationEngine, VerificationError
 from codepilot.verification.models import TestExecution, VerificationVerdict
@@ -168,3 +168,53 @@ def test_added_symlink_fails_verification_without_following(tmp_path):
     assert "LINKED_ENTRY_DETECTED" in result.reasons
     assert result.diff.unauthorized == ["alias.py"]
     assert not result.retryable
+
+
+def test_skipped_baseline_entries_are_inconclusive(tmp_path, monkeypatch):
+    (tmp_path / "app.py").write_text("value = 1\n", encoding="utf-8")
+    workspace, runner, engine = make_engine(tmp_path, TestExecution(exit_code=0))
+    monkeypatch.setattr(
+        workspace,
+        "list_files",
+        lambda *args, **kwargs: FileListing(["app.py"], skipped=1),
+    )
+    engine.prepare()
+
+    result = engine.verify({})
+
+    assert result.verdict is VerificationVerdict.INCONCLUSIVE
+    assert result.reasons == ["DIFF_INCOMPLETE"]
+    assert result.test.exit_code == 0
+    assert not result.retryable
+    assert runner.calls == [tmp_path]
+
+
+def test_skipped_current_entries_are_inconclusive(tmp_path, monkeypatch):
+    (tmp_path / "app.py").write_text("value = 1\n", encoding="utf-8")
+    workspace, runner, engine = make_engine(tmp_path, TestExecution(exit_code=0))
+    real_list_files = workspace.list_files
+    calls = 0
+
+    def listing_with_skip(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        listing = real_list_files(*args, **kwargs)
+        if calls >= 2:
+            return FileListing(
+                paths=listing.paths,
+                truncated=listing.truncated,
+                skipped=1,
+                linked_paths=listing.linked_paths,
+            )
+        return listing
+
+    monkeypatch.setattr(workspace, "list_files", listing_with_skip)
+    engine.prepare()
+
+    result = engine.verify({})
+
+    assert result.verdict is VerificationVerdict.INCONCLUSIVE
+    assert result.reasons == ["DIFF_INCOMPLETE"]
+    assert result.test.exit_code == 0
+    assert not result.retryable
+    assert runner.calls == [tmp_path]
