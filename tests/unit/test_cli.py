@@ -170,3 +170,52 @@ def test_verification_report_is_rendered():
     assert "Repair retries: 3" in result.output
     assert "app.py (modified, authorized)" in result.output
     assert "assertion failed" in result.output
+
+
+def _terminal_report(reason):
+    return AgentRunResult(
+        state=AgentState(status=AgentStatus.CANCELLED, error=reason),
+        report=TaskReport(
+            verdict=VerificationVerdict.INCONCLUSIVE,
+            remaining_issues=[reason],
+        ),
+    )
+
+
+def _waiting_loop(result):
+    waiting = AgentState(status=AgentStatus.WAITING_APPROVAL)
+    return SimpleNamespace(
+        state=waiting,
+        permissions=Mock(pending=None),
+        start=AsyncMock(return_value=AgentRunResult(state=waiting)),
+        deny=Mock(return_value=result),
+        cancel=Mock(return_value=result),
+    )
+
+
+def test_deny_emits_inconclusive_task_report():
+    loop = _waiting_loop(_terminal_report("PENDING_ACTION_DENIED"))
+    with patch("codepilot.cli.main.GeminiProvider") as factory:
+        factory.return_value.close = AsyncMock()
+        with patch("codepilot.cli.main._create_agent_loop", return_value=loop):
+            result = runner.invoke(app, input="task\n/deny\n/exit\n")
+    assert result.exit_code == 0
+    assert "Pending action denied. No files were changed." in result.output
+    assert "Verification: INCONCLUSIVE" in result.output
+    assert "Remaining issues: PENDING_ACTION_DENIED" in result.output
+    loop.deny.assert_called_once()
+    loop.cancel.assert_not_called()
+
+
+def test_cancel_emits_inconclusive_task_report():
+    loop = _waiting_loop(_terminal_report("TASK_CANCELLED"))
+    with patch("codepilot.cli.main.GeminiProvider") as factory:
+        factory.return_value.close = AsyncMock()
+        with patch("codepilot.cli.main._create_agent_loop", return_value=loop):
+            result = runner.invoke(app, input="task\n/cancel\n/exit\n")
+    assert result.exit_code == 0
+    assert "Task cancelled." in result.output
+    assert "Verification: INCONCLUSIVE" in result.output
+    assert "Remaining issues: TASK_CANCELLED" in result.output
+    loop.cancel.assert_called_once()
+    loop.deny.assert_not_called()

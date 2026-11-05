@@ -86,6 +86,7 @@ class AgentLoop:
         self._verifications: list[VerificationResult] = []
         self._repair_attempts = 0
         self._verification_prepared = False
+        self._terminal_reason: str | None = None
 
     @property
     def declarations(self) -> list[dict[str, object]]:
@@ -168,21 +169,27 @@ class AgentLoop:
             return pending
         return await self._run()
 
-    def deny(self) -> None:
+    def deny(self) -> AgentRunResult:
         if self.state.status is not AgentStatus.WAITING_APPROVAL:
             raise RuntimeError("No pending action.")
         self.permissions.cancel()
         self.state.cancel()
+        self.state.error = "PENDING_ACTION_DENIED"
+        self._terminal_reason = "PENDING_ACTION_DENIED"
+        return self._result()
 
-    def cancel(self) -> None:
+    def cancel(self) -> AgentRunResult:
         if self.state.status in {
             AgentStatus.COMPLETED,
             AgentStatus.FAILED,
             AgentStatus.CANCELLED,
         }:
-            return
+            return self._result()
         self.permissions.cancel()
         self.state.cancel()
+        self.state.error = "TASK_CANCELLED"
+        self._terminal_reason = "TASK_CANCELLED"
+        return self._result()
 
     async def _run(self) -> AgentRunResult:
         while self.state.current_step < self.max_steps:
@@ -339,6 +346,7 @@ class AgentLoop:
                 self._repair_attempts,
                 self.state.error,
                 fallback_diff=fallback_diff,
+                forced_reason=self._terminal_reason,
             )
             if self.verifier is not None and terminal
             else None

@@ -79,3 +79,28 @@ def test_report_uses_fallback_diff_when_verification_did_not_run():
     assert report.verdict is VerificationVerdict.INCONCLUSIVE
     assert report.files_changed == [change]
     assert report.tests_executed == []
+
+
+def test_forced_reason_makes_terminal_cancel_deny_inconclusive():
+    failure = TestExecution(exit_code=1, stderr="failure\n")
+    verification = VerificationResult(
+        verdict=VerificationVerdict.FAIL,
+        reasons=["TESTS_FAILED"],
+        test=failure,
+        diff=DiffReport(
+            changes=[FileChange(path="app.py", change="modified", authorized=True)]
+        ),
+        retryable=True,
+    )
+
+    report = build_task_report(
+        [verification],
+        retry_count=1,
+        forced_reason="PENDING_ACTION_DENIED",
+    )
+
+    assert report.verdict is VerificationVerdict.INCONCLUSIVE
+    assert report.remaining_issues == ["PENDING_ACTION_DENIED"]
+    assert report.files_changed == verification.diff.changes
+    assert report.tests_executed == [failure]
+    assert report.retry_count == 1

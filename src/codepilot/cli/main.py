@@ -86,15 +86,17 @@ async def chat(config: Config) -> None:
                 pending = current.permissions.pending
                 if pending is not None:
                     current.permissions.deny(pending.action.action_id)
-                current.deny()
+                result = current.deny()
                 show("Pending action denied. No files were changed.")
+                _show_agent_result(result)
                 current = None
             elif text == "/cancel":
                 if current is None:
                     show("No active task.")
                     continue
-                current.cancel()
+                result = current.cancel()
                 show("Task cancelled.")
+                _show_agent_result(result)
                 current = None
             elif text.startswith("/"):
                 show("Unknown command. Type /help.")

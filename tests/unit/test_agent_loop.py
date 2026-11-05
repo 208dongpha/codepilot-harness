@@ -524,3 +524,78 @@ async def test_report_includes_changes_when_task_fails_before_verification(harne
     assert result.report.verdict is VerificationVerdict.INCONCLUSIVE
     assert [change.path for change in result.report.files_changed] == ["app.py"]
     assert result.report.tests_executed == []
+
+
+async def test_deny_returns_inconclusive_report_and_no_writes(harness):
+    host, isolated, permissions, provider, loop = harness
+    attach_verifier(loop, [])
+    provider.generate_turn.return_value = ModelTurn(
+        tool_calls=[
+            ToolCall(
+                id="patch-1",
+                name="apply_patch",
+                arguments={
+                    "operation": "replace",
+                    "target": "app.py",
+                    "content": "changed\n",
+                },
+            )
+        ]
+    )
+    waiting = await loop.start("Change app")
+    assert waiting.state.status is AgentStatus.WAITING_APPROVAL
+    loop._verifications.append(
+        verification_result(
+            VerificationVerdict.FAIL,
+            reasons=["TESTS_FAILED"],
+            test=TestExecution(exit_code=1),
+            retryable=True,
+        )
+    )
+    permissions.deny(waiting.pending.action.action_id)
+
+    result = loop.deny()
+
+    assert result.state.status is AgentStatus.CANCELLED
+    assert result.state.error == "PENDING_ACTION_DENIED"
+    assert result.report.verdict is VerificationVerdict.INCONCLUSIVE
+    assert result.report.remaining_issues == ["PENDING_ACTION_DENIED"]
+    assert result.report.files_changed == []
+    assert len(result.report.tests_executed) == 1
+    assert result.report.tests_executed[0].exit_code == 1
+    assert permissions.pending.denied is True
+    assert permissions.pending.cancelled is True
+    assert (host / "app.py").read_text(encoding="utf-8") == "value = 1\n"
+    assert (isolated.root / "app.py").read_text(encoding="utf-8") == "value = 1\n"
+
+
+async def test_cancel_returns_inconclusive_report_and_no_writes(harness):
+    host, isolated, permissions, provider, loop = harness
+    attach_verifier(loop, [])
+    provider.generate_turn.return_value = ModelTurn(
+        tool_calls=[
+            ToolCall(
+                id="patch-1",
+                name="apply_patch",
+                arguments={
+                    "operation": "replace",
+                    "target": "app.py",
+                    "content": "changed\n",
+                },
+            )
+        ]
+    )
+    waiting = await loop.start("Change app")
+    assert waiting.state.status is AgentStatus.WAITING_APPROVAL
+
+    result = loop.cancel()
+
+    assert result.state.status is AgentStatus.CANCELLED
+    assert result.state.error == "TASK_CANCELLED"
+    assert result.report.verdict is VerificationVerdict.INCONCLUSIVE
+    assert result.report.remaining_issues == ["TASK_CANCELLED"]
+    assert result.report.files_changed == []
+    assert permissions.pending.cancelled is True
+    assert permissions.pending.denied is False
+    assert (host / "app.py").read_text(encoding="utf-8") == "value = 1\n"
+    assert (isolated.root / "app.py").read_text(encoding="utf-8") == "value = 1\n"

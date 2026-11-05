@@ -25,11 +25,15 @@ def build_task_report(
     retry_count: int,
     state_error: str | None = None,
     fallback_diff: DiffReport | None = None,
+    forced_reason: str | None = None,
 ) -> TaskReport:
     latest = verifications[-1] if verifications else None
-    issues = list(latest.reasons) if latest is not None else []
-    if state_error is not None and state_error not in issues:
-        issues.append(state_error)
+    if forced_reason is not None:
+        issues = [forced_reason]
+    else:
+        issues = list(latest.reasons) if latest is not None else []
+        if state_error is not None and state_error not in issues:
+            issues.append(state_error)
     tests = [result.test for result in verifications if result.test is not None]
     if latest is not None:
         files = list(latest.diff.changes)
@@ -37,8 +41,14 @@ def build_task_report(
         files = list(fallback_diff.changes)
     else:
         files = []
+    if forced_reason is not None:
+        verdict = VerificationVerdict.INCONCLUSIVE
+    elif latest is not None:
+        verdict = latest.verdict
+    else:
+        verdict = VerificationVerdict.INCONCLUSIVE
     return TaskReport(
-        verdict=latest.verdict if latest is not None else VerificationVerdict.INCONCLUSIVE,
+        verdict=verdict,
         files_changed=files,
         tests_executed=tests[-8:],
         retry_count=retry_count,
