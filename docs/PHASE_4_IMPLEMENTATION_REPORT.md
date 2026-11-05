@@ -1,139 +1,146 @@
-# Phase 4 — Implementation Report: Verification & Recovery
+# Báo cáo triển khai Phase 4 — Verification & Recovery
 
-> **Scope:** CP-017 through CP-021 only.
-> **Status:** Implementation and local verification complete; awaiting Architect / Reviewer review.
-> **Phase acceptance:** Not asserted. Only the Project Owner can approve the phase.
+> **Phạm vi:** chỉ CP-017 đến CP-021.
+> **Trạng thái:** Triển khai hoàn tất; xác minh độc lập của Reviewer ghi nhận 3 lỗi Docker CLI timeout; đang chờ Architect / Reviewer review.
+> **Phê duyệt phase:** Không tự khẳng định. Chỉ Project Owner được phê duyệt phase.
 
-## 1. Summary
+## 1. Tóm tắt
 
-Phase 4 adds evidence-based verification and bounded self-correction to CodePilot Harness:
+Phase 4 bổ sung xác minh dựa trên bằng chứng và tự sửa lỗi có giới hạn cho CodePilot Harness:
 
-1. The configured test command runs inside the existing Docker sandbox, never on the host.
-2. The sandbox workspace is compared against a baseline captured before the task, with
-   approved patch hashes used to distinguish authorized from unauthorized changes.
-3. A verification engine returns `PASS`, `FAIL`, or `INCONCLUSIVE` from tests, diff evidence,
-   and policy checks.
-4. Test failures are sent back to the model as bounded, redacted evidence, with a hard maximum
-   of three repair retries.
-5. Each task produces a report containing changed files, executed tests, verdict, retry count,
-   and remaining issues.
+1. Lệnh test đã cấu hình chạy bên trong Docker sandbox hiện có, không bao giờ chạy trên Host.
+2. Workspace sandbox được so sánh với baseline được chụp trước task; hash của các patch đã được
+   phê duyệt được dùng để phân biệt thay đổi được phép và thay đổi không được phép.
+3. Verification Engine trả về `PASS`, `FAIL` hoặc `INCONCLUSIVE` từ kết quả test, bằng chứng diff
+   và kiểm tra policy.
+4. Lỗi test được gửi lại cho model dưới dạng bằng chứng có giới hạn, đã redact, với tối đa cứng
+   3 lần repair retry.
+5. Mỗi task tạo báo cáo gồm files changed, tests executed, verdict, retry count và remaining
+   issues.
 
-Phase 1–3 behavior is preserved when no verifier is supplied to the agent loop. Phase 5–8
-features were not implemented: there is no host patch application, no copied-workspace sandbox
-hardening, and no session persistence.
+Hành vi Phase 1–3 được giữ nguyên khi không truyền verifier vào agent loop. Không triển khai
+Phase 5–8: không có host patch application, không có hardening sandbox bằng copied workspace và
+không có session persistence.
 
-## 2. Tasks Completed
+## 2. Các task đã hoàn thành
 
-| Task | Status | Delivered behavior |
+| Task | Trạng thái triển khai | Hành vi đã giao |
 |---|---|---|
-| CP-017 — Test Runner | Implemented | Runs the configured command in a disposable Docker container, collects exit code/stdout/stderr, enforces timeout and output limits, and verifies cleanup. |
-| CP-018 — Git Diff Verification | Implemented | Captures a baseline, detects added/modified/deleted/binary/sensitive changes, validates changed content against approved patch hashes, and emits a bounded git-style unified diff. |
-| CP-019 — Verification Engine | Implemented | Returns `PASS`, `FAIL`, or `INCONCLUSIVE` from test results, diff evidence, and policy violations. Unauthorized/policy changes stop immediately. |
-| CP-020 — Self-Correction | Implemented | Sends redacted test evidence back to the model, tracks repair attempts, allows at most three retries, preserves verification history, and stops on exhausted budget or unsafe changes. |
-| CP-021 — Task Report | Implemented | Reports verdict, changed files, test executions, verification attempts, retry count, and remaining issues; the CLI renders a bounded summary. |
+| CP-017 — Test Runner | Đã triển khai | Chạy lệnh đã cấu hình trong Docker container dùng một lần, thu thập exit code/stdout/stderr, áp dụng timeout và giới hạn output, rồi xác minh cleanup. |
+| CP-018 — Git Diff Verification | Đã triển khai | Chụp baseline, phát hiện thay đổi added/modified/deleted/binary/sensitive, đối chiếu nội dung thay đổi với hash của patch đã phê duyệt và tạo bounded git-style unified diff. |
+| CP-019 — Verification Engine | Đã triển khai | Trả về `PASS`, `FAIL` hoặc `INCONCLUSIVE` từ kết quả test, bằng chứng diff và policy violations. Thay đổi unauthorized/policy dừng ngay. |
+| CP-020 — Self-Correction | Đã triển khai | Gửi bằng chứng test đã redact lại cho model, theo dõi repair attempts, cho phép tối đa 3 lần retry, lưu verification history và dừng khi hết budget hoặc gặp thay đổi không an toàn. |
+| CP-021 — Task Report | Đã triển khai | Báo cáo verdict, changed files, test executions, verification attempts, retry count và remaining issues; CLI render bản tóm tắt có giới hạn. |
 
-## 3. Features Implemented
+Ghi chú: phần triển khai code của CP-017 đến CP-021 đã hoàn tất; kết quả xác minh Docker độc lập
+của Reviewer bị lỗi timeout và được ghi nhận riêng tại mục 6, không được tính là PASS.
 
-### 3.1 Docker test execution (CP-017)
+## 3. Các chức năng đã triển khai
 
-- `DockerRuntime.run_workspace()` creates a disposable container with:
+### 3.1 Thực thi test trong Docker (CP-017)
+
+- `DockerRuntime.run_workspace()` tạo container dùng một lần với:
   - `--network none`
-  - non-root user (`_sandbox_user()`; fixed `10001:10001` when no non-root host UID exists)
+  - người dùng non-root (`_sandbox_user()`; cố định `10001:10001` khi không có host UID
+    non-root)
   - `--cpus 1`, `--memory 512m`, `--pids-limit 128`
   - `--cap-drop ALL`, `--security-opt no-new-privileges`
-  - `--read-only` root filesystem with a bounded `/tmp` tmpfs
-  - only the isolated workspace bind-mounted at `/workspace`
-  - non-secret environment variables only
-- The command is executed as an argv list, never through a shell.
-- Output is drained through bounded buffers so an unbounded test cannot exhaust harness memory.
-- Timeout kills the container/process and cleanup is verified by exact-name container lookup.
-- Docker/image failures raise safe errors and are mapped to `SANDBOX_UNAVAILABLE`,
-  `SANDBOX_IMAGE_MISSING`, `DOCKER_TIMEOUT`, or `SANDBOX_CLEANUP_FAILED`.
-- `docker/Dockerfile.sandbox` now installs `pytest>=8,<9` so the default command
-  `python -m pytest -q` works.
+  - `--read-only` root filesystem cùng `/tmp` tmpfs có giới hạn
+  - chỉ bind-mount isolated workspace tại `/workspace`
+  - chỉ các biến môi trường không chứa secret
+- Lệnh được thực thi dưới dạng argv list, không bao giờ qua shell.
+- Output được đọc qua bounded buffer để test sinh output vô hạn không làm cạn bộ nhớ của
+  Harness.
+- Timeout sẽ kill container/process; cleanup được xác minh bằng truy vấn container theo tên
+  chính xác.
+- Lỗi Docker/image trả về safe error và được map thành `SANDBOX_UNAVAILABLE`,
+  `SANDBOX_IMAGE_MISSING`, `DOCKER_TIMEOUT` hoặc `SANDBOX_CLEANUP_FAILED`.
+- `docker/Dockerfile.sandbox` hiện cài `pytest>=8,<9` để lệnh mặc định
+  `python -m pytest -q` hoạt động.
 
-### 3.2 Baseline and diff verification (CP-018)
+### 3.2 Baseline và xác minh diff (CP-018)
 
-- A text baseline is captured from the isolated workspace before the task starts.
-- `GitDiffVerifier` compares the final workspace to that baseline and reports:
-  - added, modified, and deleted files
-  - binary/unreadable files without exposing their contents
-  - sensitive-content policy violations
-  - incomplete evidence when enumeration or size limits are reached
-- The diff is a git-style unified diff generated in Python. The isolated workspace intentionally
-  excludes `.git`, so no repository git hooks or external git process are involved.
-- Authorized changes are matched against the SHA-256 of the content written by an approved
-  `PatchTool` operation. A changed path with no matching approval, or a hash mismatch, is
-  unauthorized.
-- Diff output and change lists are bounded; incomplete comparisons fail closed as
+- Baseline dạng text được chụp từ isolated workspace trước khi task bắt đầu.
+- `GitDiffVerifier` so sánh workspace cuối với baseline và báo cáo:
+  - file added, modified và deleted
+  - file binary/unreadable mà không để lộ nội dung
+  - policy violation do sensitive content
+  - bằng chứng không đầy đủ khi chạm giới hạn enumeration hoặc size
+- Diff là git-style unified diff được tạo bằng Python. Isolated workspace chủ động loại trừ
+  `.git`, nên không có git hook của repository và không có tiến trình git bên ngoài tham gia.
+- Thay đổi được phép được đối chiếu với SHA-256 của nội dung do thao tác `PatchTool` đã được
+  phê duyệt ghi ra. Đường dẫn bị thay đổi mà không có approval khớp, hoặc hash không khớp, được
+  coi là unauthorized.
+- Diff output và change list đều có giới hạn; so sánh không đầy đủ fail closed thành
   `INCONCLUSIVE`.
 
-### 3.3 Verification verdicts (CP-019)
+### 3.3 Các verdict xác minh (CP-019)
 
-Evaluation order:
+Thứ tự đánh giá:
 
-1. Policy violations → `FAIL`, not retryable.
-2. Unauthorized changes → `FAIL`, not retryable.
-3. Incomplete diff evidence → `INCONCLUSIVE`, not retryable.
-4. Sandbox/runner error → `INCONCLUSIVE`, not retryable.
-5. Test timeout → `INCONCLUSIVE`, not retryable.
-6. Nonzero test exit code → `FAIL`, retryable.
-7. All checks pass → `PASS`.
+1. Policy violation → `FAIL`, không retryable.
+2. Unauthorized change → `FAIL`, không retryable.
+3. Bằng chứng diff không đầy đủ → `INCONCLUSIVE`, không retryable.
+4. Lỗi sandbox/runner → `INCONCLUSIVE`, không retryable.
+5. Test timeout → `INCONCLUSIVE`, không retryable.
+6. Test exit code khác 0 → `FAIL`, retryable.
+7. Mọi kiểm tra đều đạt → `PASS`.
 
-The model's text alone never produces a `PASS`; the harness verdict is required.
+Chỉ text của model không bao giờ tạo ra `PASS`; verdict của Harness là bắt buộc.
 
-### 3.4 Bounded self-correction (CP-020)
+### 3.4 Tự sửa lỗi có giới hạn (CP-020)
 
-- On a retryable test failure, the agent receives a JSON feedback message containing:
-  - verdict and reason codes
-  - test command and exit code
-  - bounded, redacted test output labeled `untrusted_test_output`
-  - changed-file summary and unauthorized paths
-  - current repair attempt and maximum attempts
-- The agent can propose further patches, which still require exact-action human approval.
-- At most three repair retries are allowed (`agent.max_verification_retries`, capped at 3).
-- The loop stops on unauthorized changes, policy violations, cancellation, inconclusive
-  infrastructure evidence, exhausted retry budget, or exhausted step budget.
-- Verification history is retained in `AgentRunResult.verifications`; the latest verdict is
-  exposed as `AgentRunResult.verification`.
+- Khi test failure có thể retry, agent nhận một JSON feedback message gồm:
+  - verdict và reason code
+  - test command và exit code
+  - test output có giới hạn, đã redact, được gắn nhãn `untrusted_test_output`
+  - tóm tắt changed file và unauthorized path
+  - repair attempt hiện tại và số attempt tối đa
+- Agent có thể đề xuất thêm patch; các patch này vẫn cần approval chính xác của con người.
+- Tối đa 3 repair retry (`agent.max_verification_retries`, giới hạn cứng 3).
+- Loop dừng khi có unauthorized change, policy violation, cancellation, bằng chứng hạ tầng
+  inconclusive, hết retry budget hoặc hết step budget.
+- Verification history được giữ trong `AgentRunResult.verifications`; verdict mới nhất được
+  expose qua `AgentRunResult.verification`.
 
 ### 3.5 Task report (CP-021)
 
-`TaskReport` contains:
+`TaskReport` gồm:
 
 - `verdict`
-- `files_changed` (including authorization status and added/deleted line counts)
+- `files_changed` (gồm trạng thái authorization và số dòng added/deleted)
 - `tests_executed` (command, exit code, timeout, duration, bounded output)
 - `retry_count`
 - `verification_attempts`
 - `remaining_issues`
 
-If a task fails before verification runs (for example a provider error after an approved patch),
-the report falls back to a diff-only snapshot of the workspace.
+Nếu task thất bại trước khi verification chạy (ví dụ provider error sau một patch đã được
+approve), report fallback sang snapshot diff-only của workspace.
 
-## 4. Architecture Decisions
+## 4. Các quyết định kiến trúc
 
-- **Verification is a separate package** (`codepilot.verification`) with test runner, diff,
-  engine, recovery, report, and shared models. The CLI and agent loop depend on the engine; the
-  engine does not depend on the CLI.
-- **Docker execution remains in `execution/docker_runtime.py`.** Verification-specific policy
-  and result mapping live in `verification/test_runner.py`.
-- **No host fallback.** A Docker failure returns a safe error and an `INCONCLUSIVE` or failed
-  verification; the test command is never retried on the host.
-- **Baseline scope is per task.** The baseline is the isolated workspace state at task start,
-  which includes prior approved task changes but not changes made during the current task.
-- **Authorization is content-addressed.** Approved patch results contribute
-  `path -> SHA-256` (or `None` for deletion); verification checks final content against these
-  hashes rather than trusting the model's claim that a change was approved.
-- **Diff is generated without git.** This avoids running repository-controlled git
-  configuration/hooks and works in the isolated copy where `.git` is intentionally excluded.
-- **Test output is untrusted data.** It is bounded, credential-pattern-redacted before storage
-  or feedback, and explicitly labeled as untrusted in the model message.
-- **Reports are in-memory handoff objects.** Persistence is Phase 6 scope.
+- **Verification là một package riêng** (`codepilot.verification`) gồm test runner, diff, engine,
+  recovery, report và shared models. CLI và agent loop phụ thuộc vào engine; engine không phụ
+  thuộc vào CLI.
+- **Docker execution vẫn nằm trong `execution/docker_runtime.py`.** Policy và result mapping
+  riêng cho verification nằm trong `verification/test_runner.py`.
+- **Không có host fallback.** Lỗi Docker trả về safe error và verification `INCONCLUSIVE` hoặc
+  failed; lệnh test không bao giờ được retry trên Host.
+- **Baseline có phạm vi theo task.** Baseline là trạng thái isolated workspace tại thời điểm task
+  bắt đầu, bao gồm các thay đổi đã được approve từ task trước nhưng không gồm thay đổi phát sinh
+  trong task hiện tại.
+- **Authorization gắn với nội dung.** Kết quả patch đã approve đóng góp `path -> SHA-256` (hoặc
+  `None` cho deletion); verification kiểm tra nội dung cuối với các hash này thay vì tin vào lời
+  model rằng thay đổi đã được approve.
+- **Diff được tạo không cần git.** Cách này tránh chạy git configuration/hook do repository kiểm
+  soát và hoạt động trong isolated copy nơi `.git` bị loại trừ có chủ đích.
+- **Test output là dữ liệu không đáng tin.** Output được giới hạn, redact theo credential pattern
+  trước khi lưu hoặc gửi feedback, và được gắn nhãn untrusted rõ ràng trong message gửi model.
+- **Report là object bàn giao in-memory.** Persistence thuộc phạm vi Phase 6.
 
-## 5. Files Created or Modified
+## 5. Các file đã tạo hoặc sửa
 
-### Created
+### Đã tạo
 
 - `src/codepilot/verification/__init__.py`
 - `src/codepilot/verification/models.py`
@@ -148,105 +155,124 @@ the report falls back to a diff-only snapshot of the workspace.
 - `tests/unit/test_verification_engine.py`
 - `tests/unit/test_task_report.py`
 - `tests/integration/test_verification_docker.py`
-- `docs/PHASE_4_IMPLEMENTATION_REPORT.md` (this report)
+- `docs/PHASE_4_IMPLEMENTATION_REPORT.md` (báo cáo này)
 
-### Modified
+### Đã sửa
 
-- `src/codepilot/execution/docker_runtime.py` — sandboxed workspace command execution with
-  bounded capture and cleanup.
-- `src/codepilot/config.py` — `[verification]` configuration and command validation.
-- `codepilot.toml` — default verification command, timeout, and output limit.
-- `docker/Dockerfile.sandbox` — install pytest for the default test command.
-- `src/codepilot/agent/loop.py` — verification handoff, authorized patch tracking, retry budget,
-  verification history, and task report.
-- `src/codepilot/cli/main.py` — verifier construction and report rendering.
-- `src/codepilot/telemetry/logging.py` — safe Docker/test-runner event names.
-- `tests/unit/test_docker_runtime.py` — sandbox command execution tests.
-- `tests/unit/test_config.py` — verification configuration tests.
-- `tests/unit/test_agent_loop.py` — verification pass/fail/retry/unauthorized/report tests.
-- `tests/unit/test_cli.py` — report rendering test.
+- `src/codepilot/execution/docker_runtime.py` — thực thi lệnh trong workspace sandbox với
+  bounded capture và cleanup.
+- `src/codepilot/config.py` — cấu hình `[verification]` và validate command.
+- `codepilot.toml` — verification command, timeout và output limit mặc định.
+- `docker/Dockerfile.sandbox` — cài pytest cho test command mặc định.
+- `src/codepilot/agent/loop.py` — verification handoff, theo dõi patch đã approve, retry budget,
+  verification history và task report.
+- `src/codepilot/cli/main.py` — tạo verifier và render report.
+- `src/codepilot/telemetry/logging.py` — tên event an toàn cho Docker/test-runner.
+- `tests/unit/test_docker_runtime.py` — test thực thi lệnh trong sandbox.
+- `tests/unit/test_config.py` — test cấu hình verification.
+- `tests/unit/test_agent_loop.py` — test verification pass/fail/retry/unauthorized/report.
+- `tests/unit/test_cli.py` — test render report.
 
-### Not included
+### Không đưa vào commit
 
-The pre-existing working-tree changes to `AGENTS.md`, `IMPLEMENTATION_PLAN.md`, and `README.md`
-were not created by this implementation and were left uncommitted.
+Các thay đổi có sẵn trong working tree đối với `AGENTS.md`, `IMPLEMENTATION_PLAN.md` và
+`README.md` không do lượt triển khai này tạo ra và được giữ nguyên, không stage/commit.
 
-## 6. Tests Executed
+## 6. Các kiểm thử đã thực hiện
 
-### 6.1 Final commands
+### 6.1 Xác minh độc lập của Reviewer
 
-| Command | Result | Evidence |
+| Lệnh | Kết quả | Bằng chứng |
+|---|---|---|
+| `uv run pytest -q` | **FAIL** | **3 failed / 246 passed / 6 skipped** |
+| `uv run ruff check .` | PASS | `All checks passed!` |
+| `git diff --check` | PASS | Không có lỗi whitespace; chỉ có cảnh báo CRLF |
+
+3 lỗi là các Docker integration test bị timeout trong các lệnh Docker CLI. Theo kết quả xác minh
+độc lập này, Docker integration được ghi nhận là **environment-blocked/failed verification**;
+báo cáo **không tuyên bố PASS** cho `uv run pytest -q`. Trong bộ test hiện tại, 6 skipped tương
+ứng với các integration test ripgrep (ripgrep không được cài trong môi trường).
+
+### 6.2 Retest của Pane 4 — Software Engineer
+
+| Lệnh / phạm vi | Kết quả | Ghi chú |
 |---|---|---|
 | `uv sync` | PASS | Resolved 41 packages, checked 41 packages |
-| `uv run pytest -q` | PASS with SKIPPED | **242 passed, 13 skipped** in 7.62s |
+| `uv run pytest -q` (full suite, sau khi Docker engine phản hồi) | **249 passed, 6 skipped** | Hai lần chạy: 99.88s và 74.25s (lần sau cập nhật báo cáo); 6 skipped là ripgrep; Docker integration chạy và pass trong các lần này |
+| Docker-focused retest: `tests/integration/test_verification_docker.py` + `tests/integration/test_docker.py` | **3 failed / 4 passed** trong 139.19s | Tái hiện 3 lỗi timeout; gồm `test_real_test_runner_runs_in_docker_with_security_limits`, `test_real_recovery_workflow_fails_then_repairs_and_passes` và `test_real_docker_smoke` |
+| `uv run codepilot sandbox smoke-test` | PASS (lần chạy trước) | Docker available, image ready, network disabled, non-root |
 | `uv run ruff check .` | PASS | `All checks passed!` |
-| `git diff --check` | PASS | No whitespace errors; only CRLF conversion warnings |
-| `uv run codepilot --help` | PASS | CLI entry point renders |
-| `uv run codepilot sandbox smoke-test` | PASS | Real Docker: available, sandbox image ready, network disabled, non-root, `codepilot-smoke-ok` |
+| `git diff --check` | PASS | Không có lỗi whitespace; chỉ có cảnh báo CRLF |
+| `uv run codepilot --help` | PASS | CLI entry point render được |
 
-The 13 final skips are:
+Lần full suite **249 passed, 6 skipped** xảy ra ngay sau lần Docker-focused retest thất bại; lần
+chạy lại sau khi cập nhật báo cáo cũng cho **249 passed, 6 skipped** trong 74.25s. Kết quả này cho
+thấy lỗi timeout của Docker CLI không ổn định theo môi trường. Kết quả này **không thay thế** kết
+quả FAIL độc lập của Reviewer và không được dùng để tuyên bố PASS cho xác minh Docker.
 
-- 6 ripgrep integration tests (`ripgrep` is not installed in this environment).
-- 1 Docker smoke integration test and 6 Docker verification integration tests, skipped because
-  Docker Desktop's Linux engine failed to start after an environment-level restart.
+### 6.3 Phạm vi của Docker integration suite
 
-### 6.2 Docker-backed evidence obtained while Docker was available
+Bộ test Docker bao phủ:
 
-| Check | Result |
-|---|---|
-| `uv run pytest -q tests/integration/test_verification_docker.py` | **6 passed** in 12.45s (real Docker) |
-| `uv run codepilot sandbox smoke-test` | **PASS** (real Docker) |
-| Earlier full suite with Docker available | **248 passed, 6 skipped** (ripgrep only), before the final recovery integration test was added |
+- kiểm tra security flag và phạm vi mount
+- người dùng non-root, network disabled, read-only root, cap drop, no-new-privileges
+- CPU/memory/process limit
+- thực thi pytest command mặc định
+- truyền exit code khác 0
+- xử lý timeout và cleanup
+- xác minh diff end-to-end với thay đổi đã được approve
+- workflow recovery thực tế: fail → feedback → retry → pass
 
-The Docker verification integration suite covers:
+### 6.4 Giới hạn môi trường Docker
 
-- security flags and mount scope inspection
-- non-root user, network disabled, read-only root, cap drop, no-new-privileges
-- CPU/memory/process limits
-- default pytest command execution
-- nonzero exit-code propagation
-- timeout handling and cleanup
-- end-to-end authorized diff verification
-- real fail → feedback → retry → pass recovery workflow
+Docker Desktop/Docker CLI trong môi trường này có lúc timeout ở `docker create`, `docker inspect`
+hoặc `docker start --attach`, kể cả với smoke test có từ Phase 1. Reviewer ghi nhận
+**3 failed / 246 passed / 6 skipped**; implementer tái hiện **3 failed / 4 passed** trong
+Docker-focused retest, sau đó full suite pass **249 passed / 6 skipped**.
 
-### 6.3 Docker environment limitation
+Không phát hiện lỗi logic triển khai có thể tái lập từ các timeout này; do đó không sửa
+application code trong lượt cập nhật báo cáo. Trạng thái Docker integration được ghi nhận là
+**environment-blocked/failed**, không phải PASS. Khi Docker engine ổn định, cần chạy lại:
 
-During the final verification window Docker Desktop stopped responding and then failed to start
-its Linux engine (`Docker Desktop is unable to start`). WSL was stopped/restarted and the engine
-was restarted, but it remained stuck in `starting`. This is an external environment failure, not
-a test assertion failure in the changed code. The successfully executed Docker runs above are
-preserved as evidence; the final full-suite run records Docker integration tests as `SKIPPED`
-rather than pretending they passed.
-
-## 7. Security Verification
-
-| Control | Result | Evidence |
-|---|---|---|
-| No host test execution | PASS | `run_workspace()` only invokes `docker`; Docker failure raises `DockerError`; unit test asserts no `Popen`/host fallback |
-| Network disabled | PASS | `--network none`; Docker inspect assertion |
-| Non-root execution | PASS | `_sandbox_user()` avoids `0:0`; Docker inspect assertion |
-| Docker socket not mounted | PASS | Only `/workspace` bind; unit/integration assertions |
-| Host home not mounted | PASS | Only isolated workspace bind |
-| Resource limits | PASS | `--cpus 1`, `--memory 512m`, `--pids-limit 128`, timeout |
-| Read-only root filesystem | PASS | `--read-only` plus bounded `/tmp` tmpfs |
-| Container cleanup | PASS in stable Docker runs | Exact-name absence verification; cleanup failure is reported |
-| Secret exposure to container | PASS | Only `HOME`, `TMPDIR`, `PYTHONDONTWRITEBYTECODE`, `PYTHONUNBUFFERED`; no API key or host env |
-| Secret exposure in output/report | PASS with pattern-based limitation | `SECRET_CONTENT` redaction, bounded output, no logging of raw output |
-| Unauthorized sandbox changes | PASS | Baseline comparison and approved content hashes; unsafe changes stop the task |
-| Permission boundary preserved | PASS | Patches still require exact-action approval; verification never self-approves writes |
-| No Phase 5 host patch application | PASS | No host-write path added |
-
-## 8. Git Status and Diff Summary
-
-Working tree at report time:
-
-```text
- M AGENTS.md                 (pre-existing owner change, not staged)
- M IMPLEMENTATION_PLAN.md    (pre-existing owner change, not staged)
- M README.md                 (pre-existing owner change, not staged)
+```powershell
+docker build -f docker/Dockerfile.sandbox -t codepilot-sandbox:phase1 docker
+uv run pytest -q tests/integration/test_verification_docker.py tests/integration/test_docker.py
 ```
 
-Functional commits created (before the report commit):
+## 7. Kiểm tra bảo mật
+
+| Kiểm soát | Kết quả | Bằng chứng |
+|---|---|---|
+| Không thực thi test trên Host | PASS | `run_workspace()` chỉ gọi `docker`; lỗi Docker raise `DockerError`; unit test xác nhận không có `Popen`/host fallback |
+| Network disabled | PASS (cấu hình/unit); Docker runtime NOT VERIFIED trong lần Reviewer | `--network none`; Docker inspect assertion trong lần chạy thành công trước đó |
+| Non-root execution | PASS (cấu hình/unit); Docker runtime NOT VERIFIED trong lần Reviewer | `_sandbox_user()` tránh `0:0`; Docker inspect assertion trong lần chạy thành công trước đó |
+| Không mount Docker socket | PASS (cấu hình/unit) | Chỉ bind `/workspace`; unit/integration assertion |
+| Không mount host home | PASS (cấu hình/unit) | Chỉ bind isolated workspace |
+| Resource limits | PASS (cấu hình/unit); Docker runtime NOT VERIFIED trong lần Reviewer | `--cpus 1`, `--memory 512m`, `--pids-limit 128`, timeout |
+| Read-only root filesystem | PASS (cấu hình/unit); Docker runtime NOT VERIFIED trong lần Reviewer | `--read-only` cùng bounded `/tmp` tmpfs |
+| Container cleanup | PASS (unit); Docker runtime NOT VERIFIED trong lần Reviewer | Xác minh container vắng mặt theo tên; cleanup failure được báo lỗi, không báo success |
+| Secret không đi vào container | PASS (cấu hình/unit) | Chỉ `HOME`, `TMPDIR`, `PYTHONDONTWRITEBYTECODE`, `PYTHONUNBUFFERED`; không có API key hoặc host env |
+| Secret không lộ trong output/report | PASS (unit) với giới hạn redaction theo pattern | `SECRET_CONTENT` redaction, bounded output, không log raw output |
+| Phát hiện thay đổi sandbox unauthorized | PASS (unit) | Baseline comparison và approved content hash; thay đổi không an toàn dừng task |
+| Giữ nguyên permission boundary | PASS | Patch vẫn cần approval chính xác; verification không tự approve ghi |
+| Không triển khai host patch application của Phase 5 | PASS | Không thêm host-write path |
+
+Ghi chú: các kiểm tra Docker runtime từng được xác nhận bằng Docker inspect trong một lần chạy
+thành công trước đó, nhưng lần xác minh độc lập của Reviewer bị timeout. Vì vậy báo cáo không
+đánh dấu PASS cho Docker runtime trong lần Reviewer; các kiểm soát cấu hình/unit vẫn được đánh
+giá riêng.
+
+## 8. Git status và tóm tắt diff
+
+Working tree tại thời điểm cập nhật báo cáo:
+
+```text
+ M AGENTS.md                 (thay đổi có sẵn của Project Owner, không stage)
+ M IMPLEMENTATION_PLAN.md    (thay đổi có sẵn của Project Owner, không stage)
+ M README.md                 (thay đổi có sẵn của Project Owner, không stage)
+```
+
+Các commit chức năng đã tạo:
 
 ```text
 3196047 feat(verification): run configured tests in docker sandbox
@@ -256,79 +282,87 @@ d6e500f feat(report): summarize task verification evidence
 4016b66 feat(agent): retry bounded repairs from verification feedback
 628b4de feat(cli): display verification verdict and task report
 b7741df test(verification): cover docker execution and recovery workflow
+362fecb docs(report): record phase 4 verification and recovery
 ```
 
-The implementation adds 8 source modules under `src/codepilot/verification/` plus focused
-changes to the agent loop, CLI, configuration, Docker runtime, Dockerfile, telemetry event list,
-and tests. No files outside the Phase 4 scope were modified by this work.
+Commit cập nhật báo cáo tiếng Việt này sẽ được tạo sau khi hoàn tất kiểm tra; hash sẽ được nêu
+trong handoff cuối. Lượt cập nhật này chỉ sửa `docs/PHASE_4_IMPLEMENTATION_REPORT.md`, không sửa
+application code.
 
-## 9. Acceptance Criteria
+Việc triển khai thêm 8 module source dưới `src/codepilot/verification/` cùng các thay đổi tập
+trung ở agent loop, CLI, configuration, Docker runtime, Dockerfile, telemetry event list và test.
+Không sửa file ngoài phạm vi Phase 4.
 
-| Criterion | Status | Notes |
+## 9. Tiêu chí chấp nhận
+
+| Tiêu chí | Trạng thái | Ghi chú |
 |---|---|---|
-| Tests run in Docker | PASS | Real Docker integration passed while the engine was available |
-| Test failures analyzed | PASS | Bounded test evidence is returned to the model for repair |
-| Agent can retry | PASS | Unit and real-Docker recovery tests |
-| Retry limit enforced | PASS | Maximum 3 repairs; exhaustion test |
-| Unauthorized changes detected | PASS | Diff/engine/loop tests |
-| Verification does not rely on LLM claims | PASS | Harness runs tests and computes diff/verdict |
-| Timeout enforced | PASS | Unit and real-Docker timeout test |
-| Output limits enforced | PASS | Bounded buffer and redaction tests |
-| Container cleanup verified | PASS in stable Docker runs | Cleanup failure returns an error, never success |
-| No host fallback | PASS | Unit test asserts only `docker` commands |
-| Task report produced | PASS | Model, builder, CLI rendering, and fallback report tests |
-| Docker integration in final full-suite run | INCONCLUSIVE | Docker Desktop engine failed externally; tests skipped with explicit reason |
-| Phase 4 accepted | PENDING | Requires Project Owner approval after review |
+| Tests chạy trong Docker | **FAIL / BLOCKED (môi trường Docker)** | Reviewer: 3 Docker integration test timeout trong Docker CLI; implementer tái hiện 3 failed; không tuyên bố PASS |
+| Test failures được phân tích | PASS (unit) | Bằng chứng test có giới hạn được gửi lại cho model để repair |
+| Agent có thể retry | PASS (unit) / NOT VERIFIED (Docker integration) | Unit test retry pass; Docker recovery integration thất bại trong lần Reviewer |
+| Retry limit được áp dụng | PASS (unit) | Tối đa 3 repair; có test exhaustion |
+| Unauthorized changes được phát hiện | PASS (unit) | Diff/engine/loop tests |
+| Verification không dựa hoàn toàn vào lời LLM | PASS (unit/architecture) | Harness chạy test và tự tính diff/verdict |
+| Timeout được áp dụng | PASS (unit) / NOT VERIFIED (Docker runtime) | Unit timeout pass; Docker timeout test bị CLI timeout trong lần Reviewer |
+| Output limit được áp dụng | PASS (unit) | Bounded buffer và redaction tests |
+| Container cleanup được xác minh | PASS (unit) / NOT VERIFIED (Docker runtime) | Unit cleanup pass; Docker runtime timeout trong lần Reviewer |
+| Không fallback sang Host | PASS (unit) | Unit test xác nhận chỉ có lệnh `docker` |
+| Task report được tạo | PASS (unit/CLI) | Model, builder, CLI rendering và fallback report tests |
+| Docker integration trong full suite của Reviewer | **FAIL** | **3 failed / 246 passed / 6 skipped** |
+| Phase 4 được chấp nhận | PENDING | Cần Project Owner phê duyệt sau review |
 
-## 10. Known Limitations and Unresolved Issues
+## 10. Giới hạn đã biết và vấn đề chưa giải quyết
 
-1. **Docker Desktop instability in this environment.** The final full-suite run could not run
-   Docker integration tests because the engine failed to start. Earlier real-Docker runs passed.
-   Reviewers should rebuild the image and rerun the Docker module if their engine is healthy:
+1. **Docker Desktop/Docker CLI không ổn định trong môi trường này.** Reviewer ghi nhận
+   `uv run pytest -q` FAIL với **3 failed / 246 passed / 6 skipped**; 3 lỗi là Docker integration
+   test timeout trong Docker CLI. Implementer tái hiện **3 failed / 4 passed** trong
+   Docker-focused retest, sau đó full suite pass **249 passed / 6 skipped**. Vì lỗi không tất
+   định và smoke test có từ Phase 1 cũng từng timeout, trạng thái Docker integration được ghi là
+   environment-blocked/failed, không phải PASS. Khi Docker engine ổn định, cần rebuild image và
+   chạy lại:
    `docker build -f docker/Dockerfile.sandbox -t codepilot-sandbox:phase1 docker`.
-2. **Sandbox image dependencies.** The image contains Python and pytest, not a project's runtime
-   dependencies. Test commands requiring third-party packages need a purpose-built image or
-   preinstalled dependencies; network is disabled during tests.
-3. **Writable workspace bind mount.** Phase 4 mounts the isolated workspace read/write so tests
-   can run normally and net changes can be detected. Phase 5 is still required for copied
-   workspace isolation and stronger filesystem-race/symlink-swap hardening. Transient changes
-   that are reverted before verification are not observable.
-4. **Baseline size policy.** Baseline/diff evidence is bounded by `repository.max_total_bytes`,
-   `max_files`, and scan limits. Larger repositories produce `INCONCLUSIVE` instead of an
-   unbounded read.
-5. **Diff implementation.** CP-018 produces a git-style unified diff in Python rather than
-   invoking `git diff`. This is intentional because the isolated workspace excludes `.git` and
-   avoids executing repository-controlled git configuration. A reviewer requiring literal
-   `git diff` behavior should raise a finding.
-6. **Test output redaction is pattern-based.** Known credential shapes are redacted, but an
-   unrecognized secret printed by a test could still appear in bounded evidence. The container
-   receives no API keys or host environment secrets, and excluded files are not copied.
-7. **No test-count sanity check.** A test command that exits 0 without running any tests is
-   treated as a pass by the generic runner. The configured command is trusted harness
-   configuration.
-8. **Live Gemini verification not executed.** Verification/recovery tests use deterministic
-   scripted providers. No live Gemini call was needed for Phase 4 unit/integration evidence.
-9. **Cancellation/denial reports.** Task reports are produced for completed and failed terminal
-   states with a verifier; cancellation and denial display their existing CLI messages without a
-   final report object.
-10. **Linux root-host permissions.** On POSIX hosts running the harness as root, the container
-    uses UID 10001 while the isolated workspace is private to root. This may require permission
-    adjustment; the current Windows/Docker Desktop environment passed. This is a known
-    portability limitation, not a host-fallback path.
+2. **Dependency của sandbox image.** Image có Python và pytest, không có runtime dependency của
+   project. Test command cần package bên thứ ba phải dùng image được build riêng hoặc dependency
+   được cài sẵn; network bị tắt trong lúc test.
+3. **Bind mount workspace writable.** Phase 4 mount isolated workspace read/write để test chạy
+   bình thường và phát hiện net change. Phase 5 vẫn cần cho copied workspace isolation và
+   hardening filesystem race/symlink-swap mạnh hơn. Thay đổi tạm thời bị revert trước verification
+   sẽ không quan sát được.
+4. **Chính sách kích thước baseline.** Baseline/diff evidence bị giới hạn bởi
+   `repository.max_total_bytes`, `max_files` và scan limit. Repository lớn hơn sẽ cho
+   `INCONCLUSIVE` thay vì đọc không giới hạn.
+5. **Cách triển khai diff.** CP-018 tạo git-style unified diff bằng Python thay vì gọi
+   `git diff`. Đây là chủ đích vì isolated workspace loại trừ `.git` và tránh chạy git
+   configuration do repository kiểm soát. Reviewer yêu cầu hành vi `git diff` literal cần nêu
+   finding.
+6. **Redaction test output dựa trên pattern.** Các credential shape đã biết được redact, nhưng
+   secret không khớp pattern do test in ra vẫn có thể xuất hiện trong bounded evidence. Container
+   không nhận API key hoặc host environment secret, và file bị loại trừ không được copy.
+7. **Không có kiểm tra sanity về số lượng test.** Test command exit 0 mà không chạy test nào vẫn
+   được generic runner coi là pass. Command đã cấu hình là trusted harness configuration.
+8. **Chưa chạy xác minh Gemini live.** Verification/recovery tests dùng deterministic scripted
+   provider. Không cần gọi Gemini live cho bằng chứng unit/integration của Phase 4.
+9. **Report khi cancel/deny.** Task report được tạo cho terminal state completed/failed có
+   verifier; cancellation và denial hiển thị message CLI hiện có mà không tạo report object cuối.
+10. **Quyền trên Linux root-host.** Trên POSIX host chạy Harness bằng root, container dùng UID
+    10001 trong khi isolated workspace chỉ root truy cập được. Có thể cần điều chỉnh permission;
+    môi trường Windows/Docker Desktop hiện tại có lúc chạy được nhưng lần Reviewer bị timeout.
+    Đây là giới hạn portability/môi trường, không phải host-fallback path.
 
-## 11. Review Request
+## 11. Yêu cầu review
 
-Please review:
+Vui lòng review:
 
-1. `src/codepilot/execution/docker_runtime.py` for sandbox flags, bounded output, timeout,
-   cleanup, and no-host-fallback behavior.
-2. `src/codepilot/verification/diff.py` and `engine.py` for baseline trust, unauthorized-change
-   detection, policy precedence, and `INCONCLUSIVE` handling.
-3. `src/codepilot/agent/loop.py` for retry budget, state transitions, approved-hash tracking,
-   and evidence preservation.
-4. `src/codepilot/verification/report.py` and `cli/main.py` for report completeness and safe
-   rendering.
-5. Test coverage and the Docker environment limitation recorded above.
+1. `src/codepilot/execution/docker_runtime.py` về sandbox flag, bounded output, timeout, cleanup
+   và hành vi không fallback sang Host.
+2. `src/codepilot/verification/diff.py` và `engine.py` về baseline trust, phát hiện thay đổi
+   unauthorized, thứ tự ưu tiên policy và xử lý `INCONCLUSIVE`.
+3. `src/codepilot/agent/loop.py` về retry budget, state transition, theo dõi approved hash và lưu
+   giữ bằng chứng.
+4. `src/codepilot/verification/report.py` và `cli/main.py` về độ đầy đủ của report và render an
+   toàn.
+5. Test coverage và giới hạn môi trường Docker đã ghi nhận ở trên, đặc biệt 3 lỗi Docker CLI
+   timeout trong lần xác minh độc lập của Reviewer.
 
-The implementation stops here for Architect / Reviewer review. It does not begin Phase 5, apply
-patches to the host, or claim phase approval.
+Triển khai dừng tại đây để Architect / Reviewer review. Không bắt đầu Phase 5, không apply patch
+lên Host và không tự khẳng định phase đã được phê duyệt.
