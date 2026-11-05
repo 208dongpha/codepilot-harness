@@ -1,13 +1,13 @@
 
 # CODEPILOT HARNESS — KẾ HOẠCH TRIỂN KHAI
 
-> **Trạng thái:** Phase 1 và Phase 2 APPROVED; Phase 3 đã triển khai, chờ review
-> **Phase được phép triển khai:** Phase 3 (CP-012 đến CP-016)
+> **Trạng thái:** Phase 1 và Phase 2 APPROVED; Project Owner xác nhận Phase 3 đã hoàn thành; Phase 4 được phép triển khai
+> **Phase được phép triển khai:** Phase 4 (CP-017 đến CP-021)
 > **Kiến trúc:** Modular Monolith
 > **Thời gian dự kiến:** 8 tuần
-> **Người triển khai:** Codex
+> **Người điều phối, lập kế hoạch và review:** Architect / Reviewer
+> **Người triển khai và chạy test:** Software Engineer (agent chạy trong pane 4)
 > **Người phê duyệt:** Project Owner
-> **Người thiết kế và review:** ChatGPT
 
 ---
 
@@ -15,7 +15,7 @@
 
 ## 1.1. Mục đích tài liệu
 
-Tài liệu này hướng dẫn Codex triển khai dự án CodePilot Harness theo từng giai đoạn.
+Tài liệu này hướng dẫn agent triển khai dự án CodePilot Harness theo từng giai đoạn. Vai trò hiện hành được định nghĩa trong `AGENTS.md`.
 
 CodePilot Harness là một AI Coding Agent hoạt động trên terminal, có khả năng:
 
@@ -35,7 +35,7 @@ Mục tiêu chính là tự xây dựng Agent Harness thay vì chỉ gọi LLM A
 
 ## 1.2. Nguyên tắc triển khai
 
-Codex PHẢI:
+Agent triển khai PHẢI:
 
 1. Đọc README.md và IMPLEMENTATION_PLAN.md.
 2. Chỉ triển khai phase được người dùng cho phép.
@@ -48,9 +48,9 @@ Codex PHẢI:
 9. Báo cáo chính xác kết quả thực thi.
 10. Dừng và chờ review trước khi sang phase tiếp theo.
 
-Codex KHÔNG ĐƯỢC:
+Agent triển khai KHÔNG ĐƯỢC:
 
-- Tự động triển khai Phase 4–8.
+- Tự động triển khai Phase 5–8.
 - Tự thay đổi các quyết định kiến trúc.
 - Hardcode API key hoặc secrets.
 - Bỏ qua test để báo hoàn thành.
@@ -816,7 +816,7 @@ uv run codepilot sandbox smoke-test
 
 ### Review Gate
 
-Codex phải tạo Implementation Report và dừng lại.
+Agent triển khai phải tạo Implementation Report và dừng lại.
 
 ---
 
@@ -1510,21 +1510,21 @@ Chỉ release khi Project Owner phê duyệt.
 
 ---
 
-# 13. CODEX EXECUTION CONTRACT
+# 13. IMPLEMENTER EXECUTION CONTRACT
 
-Đây là quy định bắt buộc khi Codex triển khai.
+Đây là quy định bắt buộc cho Software Engineer và mọi implementer được chỉ định sau này.
 
 ## 13.1. Quyền triển khai
 
-Ban đầu:
+Trạng thái được cập nhật theo Project Owner:
 
 ```text
-AUTHORIZED_PHASE = 2
+AUTHORIZED_PHASE = 4
 ```
 
-Phase 1 đã được Project Owner phê duyệt code review.
-Codex chỉ được triển khai Phase 2, CP-007 đến CP-011.
-Phase 3–8 chỉ là kế hoạch tham khảo và vẫn LOCKED.
+Phase 1 và Phase 2 đã được phê duyệt. Project Owner xác nhận Phase 3 đã hoàn tất.
+Software Engineer chỉ triển khai Phase 4, CP-017 đến CP-021, theo chỉ thị hiện tại.
+Phase 5–8 vẫn LOCKED.
 
 Không được tự chuyển phase.
 
@@ -1568,7 +1568,7 @@ Không báo SKIPPED hoặc BLOCKED thành PASS.
 
 ## 13.5. Git Safety
 
-Codex phải:
+Agent triển khai phải:
 
 - Kiểm tra diff trước khi hoàn thành.
 - Không sửa unrelated files.
@@ -1581,7 +1581,7 @@ Codex phải:
 
 # 14. MẪU IMPLEMENTATION REPORT
 
-Sau mỗi phase, Codex phải tạo báo cáo theo mẫu:
+Sau mỗi phase, agent triển khai phải tạo báo cáo theo mẫu:
 
 ```text
 # PHASE N — IMPLEMENTATION REPORT
@@ -1626,7 +1626,7 @@ PASS / FAIL / INCONCLUSIVE.
 Phase đã sẵn sàng review hay chưa?
 ```
 
-Sau khi tạo báo cáo, Codex phải dừng.
+Sau khi tạo báo cáo, agent triển khai phải dừng và chờ review.
 
 ---
 
@@ -1635,7 +1635,7 @@ Sau khi tạo báo cáo, Codex phải dừng.
 Quy trình:
 
 ```text
-Codex Implement
+Software Engineer Implement
        |
        v
 Run Tests
@@ -1644,7 +1644,7 @@ Run Tests
 Implementation Report
        |
        v
-ChatGPT Review
+Architect / Reviewer Review
        |
        v
 Có Findings?
@@ -1652,7 +1652,7 @@ Có Findings?
   YES        NO
    |         |
    v         v
-Codex Fix   Owner Approval
+Software Engineer Fix  Owner Approval
    |         |
    v         v
 Review Again  Next Phase
@@ -1766,15 +1766,15 @@ KHÔNG ĐƯỢC TỰ ĐỘNG BẮT ĐẦU PHASE 2.
 | Phase | Trạng thái |
 |---|---|
 | Phase 1 | APPROVED (code review) |
-| Phase 2 | AUTHORIZED — đã triển khai CP-007–CP-011, chờ review |
-| Phase 3 | LOCKED |
-| Phase 4 | LOCKED |
+| Phase 2 | APPROVED |
+| Phase 3 | IMPLEMENTED (Project Owner reports complete; approval status not asserted here) |
+| Phase 4 | AUTHORIZED — CP-017–CP-021 |
 | Phase 5 | LOCKED |
 | Phase 6 | LOCKED |
 | Phase 7 | LOCKED |
 | Phase 8 | LOCKED |
 
-Chỉ Project Owner được quyền phê duyệt chuyển phase.
+Chỉ Project Owner được quyền phê duyệt chuyển phase. Việc Phase 4 được ủy quyền triển khai không đồng nghĩa phase đã được nghiệm thu.
 
 ---
 

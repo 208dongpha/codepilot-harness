@@ -15,22 +15,34 @@ These instructions apply to all development phases, tasks, features, bug fixes, 
 - Controls commit and push permissions.
 - Makes final decisions on phase acceptance.
 
-**ChatGPT — Architect and Reviewer**
-- Provides architecture guidance and implementation plans.
-- Reviews implementation quality, security, and maintainability.
-- Evaluates acceptance criteria and test evidence.
-- Identifies defects, risks, and improvements.
-- Recommends whether a phase should be approved.
+**Architect / Reviewer**
+- Defines scope and implementation plans for owner-authorized work.
+- Delegates implementation to the Software Engineer agent in pane 4.
+- Reviews implementation, tests, security, documentation, and handoff evidence.
+- Sends actionable findings back to pane 4 for correction and reviews the fixes.
+- Reports whether acceptance criteria are met; only the Project Owner approves a phase.
 
-**Codex — Software Engineer**
-- Implements authorized features.
-- Writes and maintains automated tests.
-- Follows repository architecture and coding standards.
-- Performs verification and security checks.
-- Produces implementation reports.
-- Stops when work requires additional authorization.
+**Software Engineer**
+- Implements only the task and phase explicitly assigned by the coordinator/Project Owner.
+- Writes and runs tests, performs security checks, and updates the implementation report.
+- Reports changed files, commands/results, limitations, and findings requiring a decision.
+- Stops after handoff and waits for review; does not expand scope or approve a phase.
 
-Codex must not independently approve a development phase or expand its authorized scope.
+The implementer must not independently approve a development phase or expand its authorized scope.
+
+### Sequential Pane Handoff (Mandatory)
+
+- Work on one task at a time; do not run tasks or agents in parallel. Only one role may actively implement, test, or review project changes at any moment.
+- All role-to-role coordination happens through Herdr. Do not rely on an undocumented side channel, a terminal transcript, or a `done`/`idle` badge as the handoff itself.
+- Sequence: (1) Architect / Reviewer writes the authorized plan and sends one implementation prompt to the Software Engineer through Herdr; (2) Software Engineer implements, tests, writes the report/docs, and stops; (3) Software Engineer sends a Herdr handoff asking for review, including report path, commits, verification evidence, and limitations; (4) Architect / Reviewer receives that handoff, then starts review while Software Engineer remains stopped; (5) if fixes are required, Architect / Reviewer sends one consolidated fix prompt through Herdr; (6) Software Engineer resumes only after that prompt, fixes/tests/docs, stops, and sends another Herdr handoff; repeat until review is clear.
+- Do not repeatedly poll, resend assignments, or run duplicate/background work while waiting. Use one Herdr wait for the requested handoff; once the Software Engineer is done, review without overlap.
+- The Architect / Reviewer reports completion and evidence to the Project Owner only after implementation and review are complete. Only the Project Owner approves phase acceptance.
+
+### Language
+
+- Write implementation reports, review findings, fix requests, and internal handoffs in Vietnamese.
+- Write public/product documentation intended for GitHub (for example README and user guides) in English. Source identifiers and commit messages follow the project's existing English conventions.
+- Follow the Project Owner's explicit language choice if they specify otherwise.
 
 ---
 
@@ -72,9 +84,9 @@ CodePilot Harness follows an eight-phase implementation plan.
 
 **Phase 2 — Repository Exploration: APPROVED**
 
-**Phase 3 — Agent Loop & Editing: AUTHORIZED**
+**Phase 3 — Agent Loop & Editing: IMPLEMENTED (Project Owner reports phase complete); review status is not asserted here**
 
-Authorized Phase 3 tasks:
+Phase 3 delivered tasks (historical):
 
 - CP-012: Agent State Machine.
 - CP-013: Agent Loop.
@@ -82,17 +94,29 @@ Authorized Phase 3 tasks:
 - CP-015: Patch Tool.
 - CP-016: CLI Approval.
 
-**Phase 4–8: LOCKED**
+**Phase 4 — Verification & Recovery: AUTHORIZED**
+
+Authorized Phase 4 tasks:
+
+- CP-017: Test Runner.
+- CP-018: Git Diff Verification.
+- CP-019: Verification Engine.
+- CP-020: Bounded Self-Correction (maximum 3 repair retries).
+- CP-021: Task Report.
+
+**Phase 5–8: LOCKED**
 
 ### Scope Restrictions
 
-During Phase 3:
+During Phase 4:
 
-- Implement the bounded Agent Loop, exact-action permissions, isolated patching, and CLI approval.
-- Maintain compatibility with Phase 1 and Phase 2 components.
-- Do not apply patches to the Host repository.
-- Do not implement automated verification, self-correction, persistence, or semantic retrieval.
-- Do not begin Phase 4 without explicit authorization.
+- Implement only CP-017–CP-021, preserving Phase 1–3 behavior.
+- Keep test execution in the existing Docker sandbox; no fallback to Host execution.
+- Verify sandbox changes against a trusted baseline and identify unauthorized changes.
+- Treat verification as evidence-based: test results, diff, and policy compliance; LLM claims alone are insufficient.
+- Enforce the maximum of 3 repair retries and stop on exhausted budget, cancellation, or unsafe/unauthorized changes.
+- Do not implement Phase 5 sandbox hardening or host patch application, Phase 6 persistence, or unrelated features.
+- Do not begin Phase 5 without explicit authorization.
 
 Phase-specific authorization must be updated when the Project Owner approves the next phase.
 
@@ -431,9 +455,9 @@ Project Owner đã cấp quyền thường trực cho **toàn bộ dự án**, �
 
 At the end of each authorized phase, produce an implementation report.
 
-For Phase 3, create:
+For the active phase, create the matching report, including:
 
-`docs/PHASE_3_IMPLEMENTATION_REPORT.md`
+- `docs/PHASE_4_IMPLEMENTATION_REPORT.md` for Phase 4.
 
 ### Required Report Sections
 
@@ -477,7 +501,7 @@ Before reporting an authorized task or phase as complete, verify:
 - [ ] Independent features are organized into focused commits.
 - [ ] No unauthorized push or merge has occurred.
 - [ ] The implementation report is complete.
-- [ ] The agent has stopped and is awaiting review.
+- [ ] Software Engineer has stopped and is awaiting review.
 
 ---
 

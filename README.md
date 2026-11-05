@@ -543,7 +543,7 @@ The development process separates responsibilities.
 - Approves phase transitions.
 - Reviews proposed changes.
 
-### ChatGPT — Architect / Reviewer
+### Architect / Reviewer
 
 - Defines requirements.
 - Creates implementation plans.
@@ -551,7 +551,7 @@ The development process separates responsibilities.
 - Checks acceptance criteria.
 - Identifies security and quality issues.
 
-### Codex — Implementer / Tester
+### Software Engineer
 
 - Implements approved tasks.
 - Writes and executes tests.
@@ -568,8 +568,9 @@ Current status:
 - Documentation: Prepared.
 - Phase 1 implementation: Approved.
 - Phase 2 implementation: Approved.
-- Phase 3 implementation: Authorized; awaiting implementation review.
-- Phase 4–8: Locked until separately authorized.
+- Phase 3 implementation: Complete per Project Owner; review/approval is not asserted here.
+- Phase 4 (Verification & Recovery): Authorized for CP-017–CP-021.
+- Phase 5–8: Locked until separately authorized.
 
 The implementation must follow `IMPLEMENTATION_PLAN.md`.
 
