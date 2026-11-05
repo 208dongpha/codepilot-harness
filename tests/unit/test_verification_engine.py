@@ -149,3 +149,22 @@ def test_incomplete_diff_is_inconclusive(tmp_path):
     assert result.verdict is VerificationVerdict.INCONCLUSIVE
     assert result.reasons == ["DIFF_INCOMPLETE"]
     assert not result.retryable
+
+
+def test_added_symlink_fails_verification_without_following(tmp_path):
+    (tmp_path / "app.py").write_text("value = 1\n", encoding="utf-8")
+    _, _, engine = make_engine(tmp_path, TestExecution(exit_code=0))
+    engine.prepare()
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.py"
+    outside.write_text("outside\n", encoding="utf-8")
+    try:
+        (tmp_path / "alias.py").symlink_to(outside)
+    except OSError:
+        pytest.skip("Symlink creation is unavailable.")
+
+    result = engine.verify({})
+
+    assert result.verdict is VerificationVerdict.FAIL
+    assert "LINKED_ENTRY_DETECTED" in result.reasons
+    assert result.diff.unauthorized == ["alias.py"]
+    assert not result.retryable

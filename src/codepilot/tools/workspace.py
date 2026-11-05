@@ -2,7 +2,7 @@ import os
 import re
 import stat
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
 
 from codepilot.config import RepositoryConfig
@@ -71,6 +71,7 @@ class FileListing:
     paths: list[str]
     truncated: bool = False
     skipped: int = 0
+    linked_paths: list[str] = field(default_factory=list)
 
 
 class Workspace:
@@ -138,6 +139,7 @@ class Workspace:
         entries = 0
         depth_truncated = False
         skipped = 0
+        linked_paths: list[str] = []
         deadline = time.monotonic() + self.config.timeout_seconds
         while pending:
             folder = pending.pop()
@@ -149,7 +151,9 @@ class Workspace:
                     for entry in listing:
                         entries += 1
                         if entries > self.config.max_scan_entries or time.monotonic() > deadline:
-                            return FileListing(sorted(paths), True, skipped)
+                            return FileListing(
+                                sorted(paths), True, skipped, sorted(linked_paths)
+                            )
                         if excluded(entry.name):
                             continue
                         children.append(entry.name)
@@ -158,6 +162,7 @@ class Workspace:
                     try:
                         info = child.lstat()
                         if linked(info):
+                            linked_paths.append(child.relative_to(self.root).as_posix())
                             continue
                         relative = child.relative_to(self.root).as_posix()
                         if stat.S_ISDIR(info.st_mode):
@@ -168,7 +173,9 @@ class Workspace:
                         elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
                             self.resolve(relative)
                             if len(paths) >= cap:
-                                return FileListing(sorted(paths), True, skipped)
+                                return FileListing(
+                                    sorted(paths), True, skipped, sorted(linked_paths)
+                                )
                             paths.append(relative)
                     except (ToolError, OSError):
                         skipped += 1
@@ -177,7 +184,7 @@ class Workspace:
                 raise ToolError("PERMISSION_DENIED") from None
             except OSError:
                 raise ToolError("READ_ERROR") from None
-        return FileListing(sorted(paths), depth_truncated, skipped)
+        return FileListing(sorted(paths), depth_truncated, skipped, sorted(linked_paths))
 
     def read_text(self, relative: str) -> str:
         path = self.resolve(relative)

@@ -33,7 +33,7 @@ class WorkspaceSnapshot:
         listing = workspace.list_files()
         contents: dict[str, str] = {}
         total = 0
-        complete = not listing.truncated
+        complete = not listing.truncated and not listing.linked_paths
         for path in listing.paths:
             try:
                 text = workspace.read_text(path)
@@ -78,6 +78,10 @@ class GitDiffVerifier:
         unreadable: set[str] = set()
         unknown: set[str] = set()
         policy: set[str] = set()
+        linked = set(listing.linked_paths)
+        if linked:
+            policy.add("LINKED_ENTRY_DETECTED")
+            unreadable.update(linked)
         total = 0
         size_exceeded = False
         for path in listing.paths:
@@ -98,7 +102,9 @@ class GitDiffVerifier:
                 break
             current[path] = text
 
-        enumeration_complete = not listing.truncated and not unknown and not size_exceeded
+        enumeration_complete = (
+            not listing.truncated and not unknown and not size_exceeded and not linked
+        )
         changes: list[FileChange] = []
         diff_parts: list[str] = []
         used = 0

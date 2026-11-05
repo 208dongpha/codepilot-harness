@@ -155,3 +155,62 @@ def test_incomplete_baseline_fails_closed(tmp_path):
 
     assert report.incomplete
     assert report.changes == []
+
+
+def test_workspace_list_files_reports_linked_entries_without_following(tmp_path):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    (root / "app.py").write_text("value = 1\n", encoding="utf-8")
+    outside = tmp_path / "outside.py"
+    outside.write_text("outside\n", encoding="utf-8")
+    try:
+        (root / "alias.py").symlink_to(outside)
+    except OSError:
+        pytest.skip("Symlink creation is unavailable.")
+
+    listing = Workspace(RepositoryConfig(workspace=root)).list_files()
+
+    assert listing.paths == ["app.py"]
+    assert listing.linked_paths == ["alias.py"]
+
+
+def test_added_symlink_is_reported_and_fails_closed(diff_harness, tmp_path):
+    workspace, verifier, baseline = diff_harness
+    outside = tmp_path / "outside.py"
+    outside.write_text("outside\n", encoding="utf-8")
+    try:
+        (workspace.root / "alias.py").symlink_to(outside)
+    except OSError:
+        pytest.skip("Symlink creation is unavailable.")
+
+    report = verifier.compare(baseline, {})
+
+    assert "LINKED_ENTRY_DETECTED" in report.policy_violations
+    assert report.incomplete
+    assert "alias.py" in report.unauthorized
+    change = next(item for item in report.changes if item.path == "alias.py")
+    assert change.change == "added"
+    assert change.binary
+    assert not change.authorized
+
+
+def test_replaced_file_with_symlink_is_reported_and_fails_closed(diff_harness, tmp_path):
+    workspace, verifier, baseline = diff_harness
+    outside = tmp_path / "outside.py"
+    outside.write_text("outside\n", encoding="utf-8")
+    target = workspace.root / "app.py"
+    target.unlink()
+    try:
+        target.symlink_to(outside)
+    except OSError:
+        pytest.skip("Symlink creation is unavailable.")
+
+    report = verifier.compare(baseline, {})
+
+    assert "LINKED_ENTRY_DETECTED" in report.policy_violations
+    assert report.incomplete
+    assert "app.py" in report.unauthorized
+    change = next(item for item in report.changes if item.path == "app.py")
+    assert change.change == "modified"
+    assert change.binary
+    assert not change.authorized
