@@ -18,6 +18,11 @@ engine = "docker"
 network_enabled = false
 timeout_seconds = 60
 
+[verification]
+command = "python -m pytest -q"
+timeout_seconds = 120
+max_output_chars = 20000
+
 [logging]
 level = "INFO"
 

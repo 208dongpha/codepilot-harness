@@ -11,6 +11,8 @@ def test_load_valid_config():
     assert config.llm.model == "gemini-test"
     assert config.agent.max_input_tokens == 32768
     assert config.agent.reserved_output_tokens == 4096
+    assert config.verification.command == "python -m pytest -q"
+    assert config.verification.timeout_seconds == 120
 
 
 def test_environment_override(monkeypatch):
@@ -32,6 +34,8 @@ def test_environment_override(monkeypatch):
         "[agent]\nmax_steps=0",
         "[agent]\nmax_input_tokens=1024\nreserved_output_tokens=1024",
         'api_key="secret"',
+        "[verification]\ncommand=\"python -c 'unterminated\"",
+        "[verification]\nmax_output_chars=10",
     ],
 )
 def test_invalid_config(content):
@@ -47,11 +51,15 @@ def test_missing_api_key():
 def test_all_environment_overrides(monkeypatch):
     monkeypatch.setenv("CODEPILOT_LLM_TEMPERATURE", "0.5")
     monkeypatch.setenv("CODEPILOT_SANDBOX_TIMEOUT_SECONDS", "15")
+    monkeypatch.setenv("CODEPILOT_VERIFICATION_TIMEOUT_SECONDS", "30")
+    monkeypatch.setenv("CODEPILOT_VERIFICATION_COMMAND", "python -m unittest discover -q")
     monkeypatch.setenv("CODEPILOT_LOGGING_LEVEL", "DEBUG")
     monkeypatch.setenv("CODEPILOT_SANDBOX_NETWORK_ENABLED", "false")
     config = load_config()
     assert config.llm.temperature == 0.5
     assert config.sandbox.timeout_seconds == 15
+    assert config.verification.timeout_seconds == 30
+    assert config.verification.command == "python -m unittest discover -q"
     assert config.logging.level == "DEBUG"
 
 

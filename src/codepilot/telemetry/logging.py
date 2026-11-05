@@ -11,6 +11,12 @@ SAFE_EVENTS = {
     "docker_smoke PASS",
     "docker_smoke FAIL",
     "docker_cleanup FAIL",
+    "docker_test PASS",
+    "docker_test FAIL",
+    "docker_test TIMEOUT",
+    "test_runner PASS",
+    "test_runner FAIL",
+    "test_runner TIMEOUT",
     *(
         f"tool_{status} {name}"
         for status in ("call", "success")

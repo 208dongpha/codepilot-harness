@@ -2,12 +2,21 @@
 
 import os
 import re
+import shlex
 import tomllib
 from pathlib import Path
 from typing import Literal
 
 from dotenv import dotenv_values
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 
 class ConfigurationError(ValueError):
@@ -60,6 +69,29 @@ class SandboxConfig(Section):
     timeout_seconds: int = Field(default=60, gt=0)
 
 
+class VerificationConfig(Section):
+    command: str = Field(default="python -m pytest -q", min_length=1, max_length=1024)
+    timeout_seconds: int = Field(default=120, gt=0, le=600)
+    max_output_chars: int = Field(default=20000, ge=256, le=100000)
+
+    @field_validator("command")
+    @classmethod
+    def validate_command(cls, value: str) -> str:
+        if any(char in value for char in ("\x00", "\n", "\r")):
+            raise ValueError("Invalid verification command.")
+        try:
+            parts = shlex.split(value, posix=True)
+        except ValueError:
+            raise ValueError("Invalid verification command.") from None
+        if (
+            not parts
+            or len(parts) > 64
+            or any(not part or len(part) > 1024 for part in parts)
+        ):
+            raise ValueError("Invalid verification command.")
+        return value
+
+
 class RepositoryConfig(Section):
     workspace: Path = Path(".")
     max_file_bytes: int = Field(default=131072, ge=1, le=1048576)
@@ -85,6 +117,7 @@ class Config(Section):
     agent: AgentConfig = Field(default_factory=AgentConfig)
     permissions: PermissionsConfig = Field(default_factory=PermissionsConfig)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
+    verification: VerificationConfig = Field(default_factory=VerificationConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     repository: RepositoryConfig = Field(default_factory=RepositoryConfig)
     api_key: SecretStr | None = Field(default=None, exclude=True, repr=False)
@@ -101,6 +134,7 @@ def load_config(path: Path = Path("codepilot.toml")) -> Config:
             ("agent", AgentConfig),
             ("permissions", PermissionsConfig),
             ("sandbox", SandboxConfig),
+            ("verification", VerificationConfig),
             ("logging", LoggingConfig),
             ("repository", RepositoryConfig),
         ):
