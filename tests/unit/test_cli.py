@@ -8,6 +8,14 @@ from codepilot.agent.state import AgentState, AgentStatus
 from codepilot.cli.main import app
 from codepilot.patch.tool import PatchProposal
 from codepilot.permissions.engine import PermissionEngine
+from codepilot.verification.models import (
+    DiffReport,
+    FileChange,
+    TestExecution,
+    VerificationResult,
+    VerificationVerdict,
+)
+from codepilot.verification.report import TaskReport
 
 runner = CliRunner()
 
@@ -113,3 +121,52 @@ def test_model_credential_not_printed(monkeypatch):
     assert result.exit_code == 1
     assert marker not in result.output
     assert "Invalid configuration" in result.output
+
+
+def test_verification_report_is_rendered():
+    test = TestExecution(
+        command=["python", "-m", "pytest"],
+        exit_code=1,
+        stderr="assertion failed\n",
+        duration_seconds=0.5,
+    )
+    verification = VerificationResult(
+        verdict=VerificationVerdict.FAIL,
+        reasons=["TESTS_FAILED"],
+        test=test,
+        diff=DiffReport(
+            changes=[FileChange(path="app.py", change="modified", authorized=True)]
+        ),
+        retryable=True,
+    )
+    report = TaskReport(
+        verdict=VerificationVerdict.FAIL,
+        files_changed=verification.diff.changes,
+        tests_executed=[test],
+        retry_count=3,
+        verification_attempts=4,
+        remaining_issues=["TESTS_FAILED", "VERIFICATION_RETRIES_EXHAUSTED"],
+    )
+    failed = Mock(
+        state=AgentState(status=AgentStatus.FAILED, error="VERIFICATION_RETRIES_EXHAUSTED"),
+        start=AsyncMock(
+            return_value=AgentRunResult(
+                state=AgentState(
+                    status=AgentStatus.FAILED, error="VERIFICATION_RETRIES_EXHAUSTED"
+                ),
+                verification=verification,
+                verifications=[verification],
+                report=report,
+            )
+        ),
+    )
+    with patch("codepilot.cli.main.GeminiProvider") as factory:
+        factory.return_value.close = AsyncMock()
+        with patch("codepilot.cli.main._create_agent_loop", return_value=failed):
+            result = runner.invoke(app, input="fix\n/exit\n")
+    assert result.exit_code == 0
+    assert "Verification: FAIL" in result.output
+    assert "Tests executed: 1" in result.output
+    assert "Repair retries: 3" in result.output
+    assert "app.py (modified, authorized)" in result.output
+    assert "assertion failed" in result.output

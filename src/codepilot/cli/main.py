@@ -18,6 +18,11 @@ from codepilot.permissions.engine import PermissionEngine, PermissionError
 from codepilot.telemetry.logging import configure_logging
 from codepilot.tools.factory import create_read_only_registry
 from codepilot.tools.workspace import Workspace
+from codepilot.verification.diff import GitDiffVerifier
+from codepilot.verification.engine import VerificationEngine
+from codepilot.verification.redaction import bound_and_redact
+from codepilot.verification.report import TaskReport
+from codepilot.verification.test_runner import DockerTestRunner
 
 app = typer.Typer(invoke_without_command=True)
 sandbox = typer.Typer()
@@ -116,6 +121,17 @@ def _create_agent_loop(
 ) -> AgentLoop:
     permissions = PermissionEngine()
     isolated_config = config.repository.model_copy(update={"workspace": isolated.root})
+    isolated_workspace = Workspace(isolated_config)
+    verifier = VerificationEngine(
+        workspace=isolated_workspace,
+        runner=DockerTestRunner(config.verification, config.sandbox),
+        differ=GitDiffVerifier(
+            isolated_workspace,
+            config.repository.max_total_bytes,
+            config.repository.max_output_chars,
+        ),
+        max_total_bytes=config.repository.max_total_bytes,
+    )
     return AgentLoop(
         provider=provider,
         registry=create_read_only_registry(isolated_config),
@@ -129,6 +145,8 @@ def _create_agent_loop(
             provider.count_tokens,
         ),
         max_steps=config.agent.max_steps,
+        verifier=verifier,
+        max_verification_retries=config.agent.max_verification_retries,
     )
 
 
@@ -146,6 +164,34 @@ def _show_agent_result(result: AgentRunResult) -> None:
         show(f"Assistant> {result.response or ''}")
     elif result.state.status is AgentStatus.FAILED:
         show(f"Error: {result.state.error or 'AGENT_ERROR'}")
+    if result.report is not None:
+        show(_format_report(result.report))
+
+
+def _format_report(report: TaskReport) -> str:
+    lines = [
+        f"Verification: {report.verdict.value}",
+        f"Files changed: {len(report.files_changed)}",
+        f"Tests executed: {len(report.tests_executed)}",
+        f"Repair retries: {report.retry_count}",
+    ]
+    for change in report.files_changed[:10]:
+        lines.append(
+            f"- {change.path} ({change.change}, "
+            f"{'authorized' if change.authorized else 'UNAUTHORIZED'})"
+        )
+    if report.remaining_issues:
+        lines.append("Remaining issues: " + ", ".join(report.remaining_issues))
+    test = report.tests_executed[-1] if report.tests_executed else None
+    if test is not None:
+        outcome = "TIMEOUT" if test.timed_out else f"exit {test.exit_code}"
+        lines.append(f"Last test run: {outcome} in {test.duration_seconds:.2f}s")
+        if report.verdict.value != "PASS":
+            evidence = (test.stderr or test.stdout).strip()
+            if evidence:
+                excerpt, _, _ = bound_and_redact(evidence, 1200)
+                lines.append(f"Test evidence:\n{excerpt}")
+    return "\n".join(lines)
 
 
 @app.callback()
