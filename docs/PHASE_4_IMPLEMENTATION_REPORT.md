@@ -1,7 +1,9 @@
 # Báo cáo triển khai Phase 4 — Verification & Recovery
 
 > **Phạm vi:** chỉ CP-017 đến CP-021.
-> **Trạng thái:** Đã bổ sung TaskReport cho `/cancel` và `/deny`; các fix CP-018 fail-closed đã hoàn tất; xác minh độc lập trước đó ghi nhận 3 lỗi Docker CLI timeout; đang chờ Architect / Reviewer review lại.
+> **Trạng thái:** Đã bổ sung TaskReport cho `/cancel` và `/deny`; các fix CP-018 fail-closed đã hoàn tất,
+> gồm fix review mới nhất cho excluded entries (`.env`, `secrets/`, `.ssh/`); xác minh độc lập trước đó
+> ghi nhận 3 lỗi Docker CLI timeout; đang chờ Architect / Reviewer review lại.
 > **Phê duyệt phase:** Không tự khẳng định. Chỉ Project Owner được phê duyệt phase.
 
 ## 1. Tóm tắt
@@ -393,12 +395,13 @@ b7741df test(verification): cover docker execution and recovery workflow
 84afb04 fix(verification): fail closed on linked sandbox entries
 cf3de36 fix(verification): fail closed on skipped sandbox entries
 1d4cb2d feat(report): emit inconclusive reports for cancel and deny
+10db3d8 fix(verification): fail closed on excluded sandbox entries
 ```
 
 Commit cập nhật báo cáo tiếng Việt này sẽ được tạo sau khi hoàn tất kiểm tra; hash sẽ được nêu
 trong handoff cuối. Lượt cập nhật báo cáo chỉ sửa `docs/PHASE_4_IMPLEMENTATION_REPORT.md`; các
-code fix CP-018 nằm trong commit `84afb04` và `cf3de36`; CP-021 follow-up nằm trong commit
-`1d4cb2d`; không có thay đổi application code nào khác.
+code fix CP-018 nằm trong commit `84afb04`, `cf3de36` và `10db3d8`; CP-021 follow-up nằm trong
+commit `1d4cb2d`; không có thay đổi application code nào khác.
 
 Việc triển khai thêm 8 module source dưới `src/codepilot/verification/` cùng các thay đổi tập
 trung ở agent loop, CLI, configuration, Docker runtime, Dockerfile, telemetry event list và test.
@@ -415,6 +418,7 @@ Không sửa file ngoài phạm vi Phase 4.
 | Unauthorized changes được phát hiện | PASS (unit) | Diff/engine/loop tests |
 | Symlink/reparse point không bị bỏ qua | PASS (unit) | `LINKED_ENTRY_DETECTED`; symlink added/replaced tests; engine FAIL non-retryable |
 | Skipped/inaccessible entry không tạo PASS | PASS (unit) | Baseline/current `listing.skipped > 0` -> `INCONCLUSIVE`/`DIFF_INCOMPLETE`; regression tests |
+| Excluded entry mới/sửa không tạo PASS | PASS (unit) | `.env`, `secrets/`, `.ssh/` mới hoặc thay đổi -> policy `EXCLUDED_ENTRY_ADDED`/`REMOVED`/`MODIFIED`, FAIL non-retryable; metadata-only, không đọc nội dung; baseline ổn định vẫn PASS |
 | Verification không dựa hoàn toàn vào lời LLM | PASS (unit/architecture) | Harness chạy test và tự tính diff/verdict |
 | Timeout được áp dụng | PASS (unit) / NOT VERIFIED (Docker runtime) | Unit timeout pass; Docker timeout test bị CLI timeout trong lần Reviewer |
 | Output limit được áp dụng | PASS (unit) | Bounded buffer và redaction tests |
@@ -475,15 +479,94 @@ Vui lòng review:
    và hành vi không fallback sang Host.
 2. `src/codepilot/verification/diff.py`, `src/codepilot/tools/workspace.py` và `engine.py` về
    baseline trust, phát hiện thay đổi unauthorized, thứ tự ưu tiên policy, xử lý `INCONCLUSIVE`
-   và các fix CP-018 fail-closed cho symlink/reparse point và skipped entry.
+   và các fix CP-018 fail-closed cho symlink/reparse point, skipped entry và excluded entry
+   (`.env`, `secrets/`, `.ssh/`).
 3. `src/codepilot/agent/loop.py` về retry budget, state transition, theo dõi approved hash, lưu
    giữ bằng chứng và terminal report cho `cancel()`/`deny()`.
 4. `src/codepilot/verification/report.py` và `cli/main.py` về độ đầy đủ của report, forced
    `INCONCLUSIVE` reason và render an toàn cho `/cancel`/`/deny`.
-5. Regression tests symlink added/replaced, skipped baseline/current, engine fail-closed và
-   cancel/deny report/workspace-unchanged; bảo đảm test skip chỉ khi OS không tạo được symlink.
+5. Regression tests symlink added/replaced, skipped baseline/current, excluded file/directory
+   added/modified/stable, engine fail-closed và cancel/deny report/workspace-unchanged; bảo đảm
+   test skip chỉ khi OS không tạo được symlink.
 6. Test coverage và giới hạn môi trường Docker đã ghi nhận ở trên, đặc biệt 3 lỗi Docker CLI
    timeout trong lần xác minh độc lập của Reviewer.
+
+## 12. Fix review — excluded entries lọt khỏi CP-018
+
+### 12.1. Finding và phạm vi
+
+`Workspace.list_files` bỏ qua hoàn toàn các entry khớp exclusion (`.env`, `secrets/`, `.ssh/`,
+credentials, khóa riêng tư...). Vì vậy khi một excluded entry mới xuất hiện trong sandbox, nó
+không có trong baseline lẫn listing hiện tại; `GitDiffVerifier` không thấy thay đổi và CP-018 có
+thể trả `PASS` dù workspace đã có thêm secret. Fix này chỉ xử lý finding HIGH đó trong CP-018,
+không đổi exclusion hiện có, không đọc nội dung excluded entry và không triển khai Phase 5.
+
+### 12.2. Thay đổi
+
+- `src/codepilot/tools/workspace.py`
+  - Thêm `ExcludedEntry` và trường `FileListing.excluded` để ghi **metadata** của entry bị loại
+    trừ: đường dẫn tương đối, loại (`dir`/`link`) và với file là `size` + `mtime_ns`.
+  - Phân loại exclusion: `sensitive()` nhận diện các đường dẫn credentials (`secrets/`, `.ssh/`,
+    `.aws`, `.kube`, `.env*`, `*.pem`, `*.key`, `id_rsa`...). Chỉ các entry này được duyệt metadata
+    (không đọc nội dung, không theo symlink); thư mục tooling/cache (`.git`, `.venv`,
+    `__pycache__`, `.pytest_cache`, `node_modules`, `dist`, `build`...) vẫn được loại trừ như cũ vì
+    test run tạo ra chúng một cách hợp lệ.
+  - Enumeration metadata chịu cùng giới hạn `max_scan_entries`/`timeout_seconds`; lỗi hoặc vượt
+    giới hạn tăng `skipped`/`truncated` để verification fail closed.
+- `src/codepilot/verification/diff.py`
+  - `WorkspaceSnapshot` lưu map `path -> signature` của excluded entry tại baseline.
+  - `GitDiffVerifier.compare` so sánh baseline/current và thêm policy violation không retryable:
+    `EXCLUDED_ENTRY_ADDED`, `EXCLUDED_ENTRY_REMOVED`, `EXCLUDED_ENTRY_MODIFIED`.
+  - Entry bị thay đổi được báo là binary change, `authorized=False`, nằm trong `unauthorized`;
+    nội dung không bao giờ được đưa vào diff.
+  - Entry đã tồn tại ổn định trong baseline (cùng signature) không tạo violation; đây là trường
+    hợp "đã có baseline" được xử lý riêng để không phá hành vi PASS bình thường.
+  - Bất kỳ `skipped`/`truncated`/`linked` nào vẫn giữ nguyên hành vi fail closed trước đó.
+
+### 12.3. Bằng chứng kiểm thử
+
+- RED trước fix (stash source, giữ tests): 6 failed / 26 passed; các test excluded file, excluded
+  directory và modified-baseline fail đúng như finding.
+- GREEN sau fix: `uv run pytest -q tests/unit/test_verification_diff.py
+  tests/unit/test_verification_engine.py` -> **32 passed**.
+- Regression tests mới:
+  - `test_excluded_entries_are_reported_as_metadata_only` (listing chỉ metadata, `read_text`
+    vẫn bị `ACCESS_DENIED`).
+  - `test_new_excluded_file_fails_closed` (`.env` mới -> `EXCLUDED_ENTRY_ADDED`, diff không chứa
+    giá trị synthetic).
+  - `test_new_excluded_directory_fails_closed` (`secrets/token.txt` mới).
+  - `test_modified_baseline_excluded_entry_fails_closed` (file trong `secrets/` bị sửa ->
+    `EXCLUDED_ENTRY_MODIFIED`).
+  - `test_stable_baseline_excluded_entry_stays_clean` (entry có từ baseline, không đổi -> sạch).
+  - `test_tooling_cache_churn_is_not_a_policy_violation` (`.pytest_cache` không gây nhiễu).
+  - Engine-level: `.env` mới và `.ssh/id_ed25519` mới -> verdict `FAIL` non-retryable; baseline
+    excluded ổn định -> `PASS`.
+- Full suite: `uv run pytest -q` -> **269 passed, 6 skipped**.
+- Docker integration: `docker version` server **29.8.2**;
+  `uv run pytest -q tests/integration/test_verification_docker.py -rs` -> **6 passed** trong
+  14.84s. Đây là kết quả của môi trường hiện tại, không thay thế các lần timeout lịch sử của
+  Reviewer.
+- `uv run ruff check .` -> All checks passed.
+- `git diff --check` -> không có whitespace error (chỉ còn cảnh báo LF/CRLF của Git).
+
+### 12.4. Giới hạn của fix
+
+1. **Metadata signature, không phải hash nội dung.** Phát hiện thay đổi dựa trên `size` +
+   `mtime_ns`; về lý thuyết một rewrite giữ nguyên kích thước và mtime có thể không bị phát hiện,
+   nhưng muốn vậy phải cố ý chỉnh mtime. Không đọc nội dung là yêu cầu bảo mật nên không dùng hash.
+2. **Thư mục tooling/cache không được metadata-track.** `.git`, `.venv`, `__pycache__`,
+   `.pytest_cache`, `node_modules`, `dist`, `build`... vẫn nằm ngoài phạm vi như trước; nếu track
+   chúng, mọi test run tạo `.pytest_cache` sẽ làm verification fail. Đây là giới hạn có chủ đích,
+   không phải nới exclusion.
+3. **Enumeration cap.** `secrets/` cực lớn hoặc filesystem chậm có thể chạm `max_scan_entries`/
+   timeout; khi đó verification trả `INCONCLUSIVE`, không PASS.
+
+### 12.5. Trạng thái
+
+- Commit fix: `10db3d8 fix(verification): fail closed on excluded sandbox entries`.
+- Fix finding HIGH: **PASS (unit + Docker integration trong lần chạy này)**.
+- Phase 4 acceptance: **PENDING** — chỉ Project Owner phê duyệt sau review.
+- Không bắt đầu Phase 5; không merge; không apply patch lên Host.
 
 Triển khai dừng tại đây để Architect / Reviewer review. Không bắt đầu Phase 5, không apply patch
 lên Host và không tự khẳng định phase đã được phê duyệt.
