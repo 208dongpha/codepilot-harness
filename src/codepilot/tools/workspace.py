@@ -40,6 +40,22 @@ EXCLUDED = frozenset(
         ".pypirc",
     }
 )
+TOOLING_EXCLUDED = frozenset(
+    {
+        ".git",
+        ".venv",
+        "venv",
+        "__pycache__",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".mypy_cache",
+        "node_modules",
+        "dist",
+        "build",
+        ".tox",
+        ".cache",
+    }
+)
 SECRET_CONTENT = re.compile(
     r"AIza[0-9A-Za-z_-]{30,}|AQ\.[0-9A-Za-z_-]{30,}|"
     r"(?:gh[pousr]_|github_pat_)[0-9A-Za-z_]{20,}|"
@@ -60,10 +76,23 @@ def excluded(part: str) -> bool:
     )
 
 
+def sensitive(part: str) -> bool:
+    """Return whether an excluded name hides credentials rather than build output."""
+    return excluded(part) and part.casefold() not in TOOLING_EXCLUDED
+
+
 def linked(info: os.stat_result) -> bool:
     return stat.S_ISLNK(info.st_mode) or bool(
         getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
     )
+
+
+@dataclass(frozen=True)
+class ExcludedEntry:
+    """Metadata-only record of a path excluded from content reads."""
+
+    path: str
+    signature: str
 
 
 @dataclass
@@ -72,6 +101,7 @@ class FileListing:
     truncated: bool = False
     skipped: int = 0
     linked_paths: list[str] = field(default_factory=list)
+    excluded: list[ExcludedEntry] = field(default_factory=list)
 
 
 class Workspace:
@@ -135,25 +165,53 @@ class Workspace:
         base = self.resolve(path, directory=True)
         cap = min(limit or self.config.max_files, self.config.max_files)
         paths: list[str] = []
-        pending = [base]
+        pending: list[tuple[Path, bool]] = [(base, False)]
         entries = 0
         depth_truncated = False
         skipped = 0
         linked_paths: list[str] = []
+        excluded_entries: list[ExcludedEntry] = []
         deadline = time.monotonic() + self.config.timeout_seconds
+
+        def result(truncated: bool) -> FileListing:
+            return FileListing(
+                paths=sorted(paths),
+                truncated=truncated,
+                skipped=skipped,
+                linked_paths=sorted(linked_paths),
+                excluded=sorted(excluded_entries, key=lambda item: item.path),
+            )
+
         while pending:
-            folder = pending.pop()
-            relative = folder.relative_to(self.root).as_posix()
-            self.resolve(relative, directory=True)
+            folder, metadata_only = pending.pop()
+            if not metadata_only:
+                self.resolve(folder.relative_to(self.root).as_posix(), directory=True)
             try:
                 with os.scandir(folder) as listing:
                     children = []
                     for entry in listing:
                         entries += 1
                         if entries > self.config.max_scan_entries or time.monotonic() > deadline:
-                            return FileListing(
-                                sorted(paths), True, skipped, sorted(linked_paths)
-                            )
+                            return result(True)
+                        if metadata_only or (excluded(entry.name) and sensitive(entry.name)):
+                            try:
+                                info = entry.stat(follow_symlinks=False)
+                            except OSError:
+                                skipped += 1
+                                continue
+                            relative = (folder / entry.name).relative_to(self.root).as_posix()
+                            if linked(info):
+                                excluded_entries.append(ExcludedEntry(relative, "link"))
+                            elif stat.S_ISDIR(info.st_mode):
+                                excluded_entries.append(ExcludedEntry(relative, "dir"))
+                                pending.append((folder / entry.name, True))
+                            else:
+                                excluded_entries.append(
+                                    ExcludedEntry(
+                                        relative, f"file:{info.st_size}:{info.st_mtime_ns}"
+                                    )
+                                )
+                            continue
                         if excluded(entry.name):
                             continue
                         children.append(entry.name)
@@ -169,13 +227,11 @@ class Workspace:
                             if len(child.relative_to(self.root).parts) >= self.config.max_depth:
                                 depth_truncated = True
                                 continue
-                            pending.append(child)
+                            pending.append((child, False))
                         elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
                             self.resolve(relative)
                             if len(paths) >= cap:
-                                return FileListing(
-                                    sorted(paths), True, skipped, sorted(linked_paths)
-                                )
+                                return result(True)
                             paths.append(relative)
                     except (ToolError, OSError):
                         skipped += 1
@@ -184,7 +240,7 @@ class Workspace:
                 raise ToolError("PERMISSION_DENIED") from None
             except OSError:
                 raise ToolError("READ_ERROR") from None
-        return FileListing(sorted(paths), depth_truncated, skipped, sorted(linked_paths))
+        return result(depth_truncated)
 
     def read_text(self, relative: str) -> str:
         path = self.resolve(relative)

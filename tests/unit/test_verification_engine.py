@@ -218,3 +218,52 @@ def test_skipped_current_entries_are_inconclusive(tmp_path, monkeypatch):
     assert result.test.exit_code == 0
     assert not result.retryable
     assert runner.calls == [tmp_path]
+
+
+def test_new_excluded_file_fails_verification(tmp_path):
+    (tmp_path / "app.py").write_text("value = 1\n", encoding="utf-8")
+    _, _, engine = make_engine(tmp_path, TestExecution(exit_code=0))
+    engine.prepare()
+    (tmp_path / ".env").write_text(
+        "API_KEY=synthetic-private-value\n", encoding="utf-8"
+    )
+
+    result = engine.verify({})
+
+    assert result.verdict is VerificationVerdict.FAIL
+    assert "EXCLUDED_ENTRY_ADDED" in result.reasons
+    assert result.diff.unauthorized == [".env"]
+    assert not result.retryable
+
+
+def test_new_excluded_directory_fails_verification(tmp_path):
+    (tmp_path / "app.py").write_text("value = 1\n", encoding="utf-8")
+    _, _, engine = make_engine(tmp_path, TestExecution(exit_code=0))
+    engine.prepare()
+    ssh = tmp_path / ".ssh"
+    ssh.mkdir()
+    (ssh / "id_ed25519").write_text("synthetic-private-key\n", encoding="utf-8")
+
+    result = engine.verify({})
+
+    assert result.verdict is VerificationVerdict.FAIL
+    assert "EXCLUDED_ENTRY_ADDED" in result.reasons
+    assert {".ssh", ".ssh/id_ed25519"} <= set(result.diff.unauthorized)
+    assert not result.retryable
+
+
+def test_stable_excluded_entry_still_passes(tmp_path):
+    (tmp_path / "app.py").write_text("value = 1\n", encoding="utf-8")
+    (tmp_path / "secrets").mkdir()
+    (tmp_path / "secrets" / "prod.env").write_text(
+        "TOKEN=synthetic-private-value\n", encoding="utf-8"
+    )
+    _, _, engine = make_engine(tmp_path, TestExecution(exit_code=0))
+    engine.prepare()
+
+    result = engine.verify({})
+
+    assert result.verdict is VerificationVerdict.PASS
+    assert result.reasons == []
+    assert result.diff.unauthorized == []
+    assert result.diff.policy_violations == []

@@ -1,7 +1,7 @@
 import difflib
 import hashlib
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from codepilot.tools.base import ToolError
 from codepilot.tools.workspace import Workspace
@@ -27,6 +27,7 @@ class WorkspaceSnapshot:
 
     contents: dict[str, str]
     complete: bool = True
+    excluded: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def capture(cls, workspace: Workspace, max_total_bytes: int) -> "WorkspaceSnapshot":
@@ -45,7 +46,11 @@ class WorkspaceSnapshot:
                 complete = False
                 break
             contents[path] = text
-        return cls(contents=contents, complete=complete)
+        return cls(
+            contents=contents,
+            complete=complete,
+            excluded={entry.path: entry.signature for entry in listing.excluded},
+        )
 
 
 class GitDiffVerifier:
@@ -82,6 +87,21 @@ class GitDiffVerifier:
         if linked:
             policy.add("LINKED_ENTRY_DETECTED")
             unreadable.update(linked)
+        current_excluded = {entry.path: entry.signature for entry in listing.excluded}
+        added_excluded = set(current_excluded) - set(baseline.excluded)
+        removed_excluded = set(baseline.excluded) - set(current_excluded)
+        modified_excluded = {
+            path
+            for path in set(current_excluded) & set(baseline.excluded)
+            if current_excluded[path] != baseline.excluded[path]
+        }
+        excluded_changes = added_excluded | removed_excluded | modified_excluded
+        if added_excluded:
+            policy.add("EXCLUDED_ENTRY_ADDED")
+        if removed_excluded:
+            policy.add("EXCLUDED_ENTRY_REMOVED")
+        if modified_excluded:
+            policy.add("EXCLUDED_ENTRY_MODIFIED")
         total = 0
         size_exceeded = False
         for path in listing.paths:
@@ -114,36 +134,49 @@ class GitDiffVerifier:
         used = 0
         truncated = False
 
-        for path in sorted(set(baseline.contents) | set(current) | unreadable):
+        for path in sorted(
+            set(baseline.contents) | set(current) | unreadable | excluded_changes
+        ):
             if path in unknown:
                 continue
-            binary = path in unreadable
-            if binary:
-                change = "modified" if path in baseline.contents else "added"
+            if path in excluded_changes:
+                binary = True
+                if path in added_excluded:
+                    change = "added"
+                elif path in removed_excluded:
+                    change = "deleted"
+                else:
+                    change = "modified"
                 authorized_change = False
                 additions = deletions = 0
-            elif path not in baseline.contents:
-                change = "added"
-                authorized_change = path in authorized and authorized[path] == _sha256(
-                    current[path]
-                )
-                additions = _line_count(current[path])
-                deletions = 0
-            elif path not in current:
-                if not enumeration_complete:
-                    continue
-                change = "deleted"
-                authorized_change = path in authorized and authorized[path] is None
-                additions = 0
-                deletions = _line_count(baseline.contents[path])
             else:
-                if baseline.contents[path] == current[path]:
-                    continue
-                change = "modified"
-                authorized_change = path in authorized and authorized[path] == _sha256(
-                    current[path]
-                )
-                additions = deletions = 0
+                binary = path in unreadable
+                if binary:
+                    change = "modified" if path in baseline.contents else "added"
+                    authorized_change = False
+                    additions = deletions = 0
+                elif path not in baseline.contents:
+                    change = "added"
+                    authorized_change = path in authorized and authorized[path] == _sha256(
+                        current[path]
+                    )
+                    additions = _line_count(current[path])
+                    deletions = 0
+                elif path not in current:
+                    if not enumeration_complete:
+                        continue
+                    change = "deleted"
+                    authorized_change = path in authorized and authorized[path] is None
+                    additions = 0
+                    deletions = _line_count(baseline.contents[path])
+                else:
+                    if baseline.contents[path] == current[path]:
+                        continue
+                    change = "modified"
+                    authorized_change = path in authorized and authorized[path] == _sha256(
+                        current[path]
+                    )
+                    additions = deletions = 0
 
             if not binary:
                 old = baseline.contents.get(path, "")

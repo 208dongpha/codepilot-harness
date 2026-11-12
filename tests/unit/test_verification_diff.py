@@ -4,6 +4,7 @@ import pytest
 
 from codepilot.config import RepositoryConfig
 from codepilot.patch.tool import IsolatedWorkspace
+from codepilot.tools.base import ToolError
 from codepilot.tools.workspace import Workspace
 from codepilot.verification.diff import GitDiffVerifier, WorkspaceSnapshot
 
@@ -214,3 +215,108 @@ def test_replaced_file_with_symlink_is_reported_and_fails_closed(diff_harness, t
     assert change.change == "modified"
     assert change.binary
     assert not change.authorized
+
+
+def test_excluded_entries_are_reported_as_metadata_only(tmp_path):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    (root / "app.py").write_text("value = 1\n", encoding="utf-8")
+    (root / ".env").write_text("API_KEY=synthetic-private-value\n", encoding="utf-8")
+    (root / "secrets").mkdir()
+    (root / "secrets" / "prod.env").write_text(
+        "TOKEN=synthetic-private-value\n", encoding="utf-8"
+    )
+    workspace = Workspace(RepositoryConfig(workspace=root))
+
+    listing = workspace.list_files()
+
+    assert listing.paths == ["app.py"]
+    assert [entry.path for entry in listing.excluded] == [
+        ".env",
+        "secrets",
+        "secrets/prod.env",
+    ]
+    with pytest.raises(ToolError):
+        workspace.read_text(".env")
+
+
+def test_new_excluded_file_fails_closed(diff_harness):
+    workspace, verifier, baseline = diff_harness
+    (workspace.root / ".env").write_text(
+        "API_KEY=synthetic-private-value\n", encoding="utf-8"
+    )
+
+    report = verifier.compare(baseline, {})
+
+    assert "EXCLUDED_ENTRY_ADDED" in report.policy_violations
+    assert ".env" in report.unauthorized
+    change = next(item for item in report.changes if item.path == ".env")
+    assert change.change == "added"
+    assert change.binary
+    assert not change.authorized
+    assert "synthetic-private-value" not in report.diff
+
+
+def test_new_excluded_directory_fails_closed(diff_harness):
+    workspace, verifier, baseline = diff_harness
+    secrets = workspace.root / "secrets"
+    secrets.mkdir()
+    (secrets / "token.txt").write_text("synthetic-private-value\n", encoding="utf-8")
+
+    report = verifier.compare(baseline, {})
+
+    assert "EXCLUDED_ENTRY_ADDED" in report.policy_violations
+    assert {"secrets", "secrets/token.txt"} <= set(report.unauthorized)
+    assert "synthetic-private-value" not in report.diff
+
+
+def test_modified_baseline_excluded_entry_fails_closed(tmp_path):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    (root / "app.py").write_text("value = 1\n", encoding="utf-8")
+    (root / "secrets").mkdir()
+    secret = root / "secrets" / "prod.env"
+    secret.write_text("TOKEN=old\n", encoding="utf-8")
+    config = RepositoryConfig(workspace=root, max_total_bytes=100000)
+    workspace = Workspace(config)
+    baseline = WorkspaceSnapshot.capture(workspace, config.max_total_bytes)
+    secret.write_text("TOKEN=new-and-longer\n", encoding="utf-8")
+
+    report = GitDiffVerifier(workspace, config.max_total_bytes).compare(baseline, {})
+
+    assert "EXCLUDED_ENTRY_MODIFIED" in report.policy_violations
+    change = next(item for item in report.changes if item.path == "secrets/prod.env")
+    assert change.change == "modified"
+    assert change.binary
+    assert not change.authorized
+    assert "new-and-longer" not in report.diff
+
+
+def test_stable_baseline_excluded_entry_stays_clean(tmp_path):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    (root / "app.py").write_text("value = 1\n", encoding="utf-8")
+    (root / "secrets").mkdir()
+    (root / "secrets" / "prod.env").write_text("TOKEN=synthetic\n", encoding="utf-8")
+    config = RepositoryConfig(workspace=root, max_total_bytes=100000)
+    workspace = Workspace(config)
+    baseline = WorkspaceSnapshot.capture(workspace, config.max_total_bytes)
+
+    report = GitDiffVerifier(workspace, config.max_total_bytes).compare(baseline, {})
+
+    assert report.changes == []
+    assert report.policy_violations == []
+    assert not report.incomplete
+
+
+def test_tooling_cache_churn_is_not_a_policy_violation(diff_harness):
+    workspace, verifier, baseline = diff_harness
+    cache = workspace.root / ".pytest_cache" / "v"
+    cache.mkdir(parents=True)
+    (cache / "cache.json").write_text("{}\n", encoding="utf-8")
+
+    report = verifier.compare(baseline, {})
+
+    assert report.changes == []
+    assert report.policy_violations == []
+    assert not report.incomplete
