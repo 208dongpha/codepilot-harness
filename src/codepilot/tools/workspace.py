@@ -1,3 +1,4 @@
+import ctypes
 import os
 import re
 import stat
@@ -85,6 +86,54 @@ def linked(info: os.stat_result) -> bool:
     return stat.S_ISLNK(info.st_mode) or bool(
         getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
     )
+
+
+class _WindowsFileBasicInfo(ctypes.Structure):
+    _fields_ = [
+        ("creation_time", ctypes.c_int64),
+        ("last_access_time", ctypes.c_int64),
+        ("last_write_time", ctypes.c_int64),
+        ("change_time", ctypes.c_int64),
+        ("file_attributes", ctypes.c_uint32),
+    ]
+
+
+def _windows_change_time(path: Path) -> int:
+    """Read the NTFS change time without reading file content."""
+    import msvcrt
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        basic = _WindowsFileBasicInfo()
+        if not kernel32.GetFileInformationByHandleEx(
+            ctypes.c_void_p(msvcrt.get_osfhandle(fd)),
+            0,
+            ctypes.byref(basic),
+            ctypes.sizeof(basic),
+        ):
+            raise OSError(ctypes.get_last_error(), "GetFileInformationByHandleEx")
+        return basic.change_time
+    finally:
+        os.close(fd)
+
+
+def file_signature(path: Path, info: os.stat_result) -> str:
+    """Metadata signature that detects rewrites without reading excluded content."""
+    parts = [
+        "file",
+        str(info.st_size),
+        str(info.st_mtime_ns),
+        str(info.st_ctime_ns),
+        str(info.st_dev),
+        str(info.st_ino),
+        str(info.st_nlink),
+        str(getattr(info, "st_file_attributes", 0)),
+    ]
+    if os.name == "nt":
+        parts.append(str(_windows_change_time(path)))
+    return ":".join(parts)
 
 
 @dataclass(frozen=True)
@@ -202,15 +251,19 @@ class Workspace:
                             relative = (folder / entry.name).relative_to(self.root).as_posix()
                             if linked(info):
                                 excluded_entries.append(ExcludedEntry(relative, "link"))
+                                linked_paths.append(relative)
                             elif stat.S_ISDIR(info.st_mode):
                                 excluded_entries.append(ExcludedEntry(relative, "dir"))
                                 pending.append((folder / entry.name, True))
+                            elif stat.S_ISREG(info.st_mode):
+                                try:
+                                    signature = file_signature(folder / entry.name, info)
+                                except OSError:
+                                    skipped += 1
+                                    continue
+                                excluded_entries.append(ExcludedEntry(relative, signature))
                             else:
-                                excluded_entries.append(
-                                    ExcludedEntry(
-                                        relative, f"file:{info.st_size}:{info.st_mtime_ns}"
-                                    )
-                                )
+                                excluded_entries.append(ExcludedEntry(relative, "other"))
                             continue
                         if excluded(entry.name):
                             continue

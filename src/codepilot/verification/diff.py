@@ -28,6 +28,7 @@ class WorkspaceSnapshot:
     contents: dict[str, str]
     complete: bool = True
     excluded: dict[str, str] = field(default_factory=dict)
+    linked: list[str] = field(default_factory=list)
 
     @classmethod
     def capture(cls, workspace: Workspace, max_total_bytes: int) -> "WorkspaceSnapshot":
@@ -50,6 +51,7 @@ class WorkspaceSnapshot:
             contents=contents,
             complete=complete,
             excluded={entry.path: entry.signature for entry in listing.excluded},
+            linked=sorted(set(listing.linked_paths)),
         )
 
 
@@ -76,7 +78,21 @@ class GitDiffVerifier:
         authorized: Mapping[str, str | None],
     ) -> DiffReport:
         if not baseline.complete:
-            return DiffReport(incomplete=True)
+            baseline_linked = sorted(set(baseline.linked))
+            return DiffReport(
+                changes=[
+                    FileChange(
+                        path=path,
+                        change="modified",
+                        binary=True,
+                        authorized=False,
+                    )
+                    for path in baseline_linked[:_MAX_CHANGES]
+                ],
+                truncated=len(baseline_linked) > _MAX_CHANGES,
+                incomplete=True,
+                policy_violations=["LINKED_ENTRY_DETECTED"] if baseline_linked else [],
+            )
 
         listing = self.workspace.list_files()
         current: dict[str, str] = {}

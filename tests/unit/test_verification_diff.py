@@ -1,4 +1,6 @@
 import hashlib
+import os
+import time
 
 import pytest
 
@@ -320,3 +322,58 @@ def test_tooling_cache_churn_is_not_a_policy_violation(diff_harness):
     assert report.changes == []
     assert report.policy_violations == []
     assert not report.incomplete
+
+
+def test_stable_baseline_sensitive_symlink_fails_closed(tmp_path):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    (root / "app.py").write_text("value = 1\n", encoding="utf-8")
+    ssh = root / ".ssh"
+    ssh.mkdir()
+    outside = tmp_path / "outside.keys"
+    outside.write_text("synthetic-private-key\n", encoding="utf-8")
+    try:
+        (ssh / "config").symlink_to(outside)
+    except OSError:
+        pytest.skip("Symlink creation is unavailable.")
+    config = RepositoryConfig(workspace=root, max_total_bytes=100000)
+    workspace = Workspace(config)
+    baseline = WorkspaceSnapshot.capture(workspace, config.max_total_bytes)
+    assert not baseline.complete
+
+    report = GitDiffVerifier(workspace, config.max_total_bytes).compare(baseline, {})
+
+    assert "LINKED_ENTRY_DETECTED" in report.policy_violations
+    assert report.incomplete
+    assert ".ssh/config" in report.unauthorized
+    change = next(item for item in report.changes if item.path == ".ssh/config")
+    assert change.binary
+    assert not change.authorized
+    assert "synthetic-private-key" not in report.diff
+
+
+def test_same_size_rewrite_with_restored_mtime_is_detected(tmp_path):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    (root / "app.py").write_text("value = 1\n", encoding="utf-8")
+    (root / "secrets").mkdir()
+    secret = root / "secrets" / "prod.env"
+    secret.write_text("TOKEN=old\n", encoding="utf-8")
+    config = RepositoryConfig(workspace=root, max_total_bytes=100000)
+    workspace = Workspace(config)
+    baseline = WorkspaceSnapshot.capture(workspace, config.max_total_bytes)
+    original = secret.stat()
+    time.sleep(0.01)
+    secret.write_text("TOKEN=new\n", encoding="utf-8")
+    os.utime(secret, ns=(original.st_atime_ns, original.st_mtime_ns))
+    assert secret.stat().st_size == original.st_size
+    assert secret.stat().st_mtime_ns == original.st_mtime_ns
+
+    report = GitDiffVerifier(workspace, config.max_total_bytes).compare(baseline, {})
+
+    assert "EXCLUDED_ENTRY_MODIFIED" in report.policy_violations
+    change = next(item for item in report.changes if item.path == "secrets/prod.env")
+    assert change.change == "modified"
+    assert change.binary
+    assert not change.authorized
+    assert "TOKEN=new" not in report.diff

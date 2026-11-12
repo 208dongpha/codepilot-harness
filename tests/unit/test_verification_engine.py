@@ -1,3 +1,5 @@
+import os
+import time
 from pathlib import Path
 
 import pytest
@@ -267,3 +269,65 @@ def test_stable_excluded_entry_still_passes(tmp_path):
     assert result.reasons == []
     assert result.diff.unauthorized == []
     assert result.diff.policy_violations == []
+
+
+def test_stable_excluded_symlink_fails_verification(tmp_path):
+    (tmp_path / "app.py").write_text("value = 1\n", encoding="utf-8")
+    ssh = tmp_path / ".ssh"
+    ssh.mkdir()
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.keys"
+    outside.write_text("synthetic-private-key\n", encoding="utf-8")
+    try:
+        (ssh / "config").symlink_to(outside)
+    except OSError:
+        pytest.skip("Symlink creation is unavailable.")
+    _, _, engine = make_engine(tmp_path, TestExecution(exit_code=0))
+    engine.prepare()
+
+    result = engine.verify({})
+
+    assert result.verdict is VerificationVerdict.FAIL
+    assert "LINKED_ENTRY_DETECTED" in result.reasons
+    assert ".ssh/config" in result.diff.unauthorized
+    assert not result.retryable
+
+
+def test_same_size_rewrite_with_restored_mtime_fails_verification(tmp_path):
+    (tmp_path / "app.py").write_text("value = 1\n", encoding="utf-8")
+    (tmp_path / "secrets").mkdir()
+    secret = tmp_path / "secrets" / "prod.env"
+    secret.write_text("TOKEN=old\n", encoding="utf-8")
+    _, _, engine = make_engine(tmp_path, TestExecution(exit_code=0))
+    engine.prepare()
+    original = secret.stat()
+    time.sleep(0.01)
+    secret.write_text("TOKEN=new\n", encoding="utf-8")
+    os.utime(secret, ns=(original.st_atime_ns, original.st_mtime_ns))
+
+    result = engine.verify({})
+
+    assert result.verdict is VerificationVerdict.FAIL
+    assert "EXCLUDED_ENTRY_MODIFIED" in result.reasons
+    assert "secrets/prod.env" in result.diff.unauthorized
+    assert not result.retryable
+
+
+def test_unavailable_sensitive_signature_is_inconclusive(tmp_path, monkeypatch):
+    (tmp_path / "app.py").write_text("value = 1\n", encoding="utf-8")
+    (tmp_path / "secrets").mkdir()
+    (tmp_path / "secrets" / "prod.env").write_text(
+        "TOKEN=synthetic-private-value\n", encoding="utf-8"
+    )
+    _, _, engine = make_engine(tmp_path, TestExecution(exit_code=0))
+
+    def unavailable(path, info):
+        raise OSError("change time is unavailable")
+
+    monkeypatch.setattr("codepilot.tools.workspace.file_signature", unavailable)
+    engine.prepare()
+
+    result = engine.verify({})
+
+    assert result.verdict is VerificationVerdict.INCONCLUSIVE
+    assert result.reasons == ["DIFF_INCOMPLETE"]
+    assert not result.retryable
