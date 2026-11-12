@@ -2,8 +2,9 @@
 
 > **Phạm vi:** chỉ CP-017 đến CP-021.
 > **Trạng thái:** Đã bổ sung TaskReport cho `/cancel` và `/deny`; các fix CP-018 fail-closed đã hoàn tất,
-> gồm fix review mới nhất cho excluded entries (`.env`, `secrets/`, `.ssh/`); xác minh độc lập trước đó
-> ghi nhận 3 lỗi Docker CLI timeout; đang chờ Architect / Reviewer review lại.
+> gồm excluded entries (`.env`, `secrets/`, `.ssh/`) và vòng re-review xử lý symlink ẩn trong excluded
+> directory cùng signature bị giả mạo bằng `os.utime`; xác minh độc lập trước đó ghi nhận 3 lỗi Docker
+> CLI timeout; đang chờ Architect / Reviewer review lại.
 > **Phê duyệt phase:** Không tự khẳng định. Chỉ Project Owner được phê duyệt phase.
 
 ## 1. Tóm tắt
@@ -396,12 +397,13 @@ b7741df test(verification): cover docker execution and recovery workflow
 cf3de36 fix(verification): fail closed on skipped sandbox entries
 1d4cb2d feat(report): emit inconclusive reports for cancel and deny
 10db3d8 fix(verification): fail closed on excluded sandbox entries
+250a6c7 fix(verification): fail closed on hidden links and forged metadata
 ```
 
 Commit cập nhật báo cáo tiếng Việt này sẽ được tạo sau khi hoàn tất kiểm tra; hash sẽ được nêu
 trong handoff cuối. Lượt cập nhật báo cáo chỉ sửa `docs/PHASE_4_IMPLEMENTATION_REPORT.md`; các
-code fix CP-018 nằm trong commit `84afb04`, `cf3de36` và `10db3d8`; CP-021 follow-up nằm trong
-commit `1d4cb2d`; không có thay đổi application code nào khác.
+code fix CP-018 nằm trong commit `84afb04`, `cf3de36`, `10db3d8` và `250a6c7`; CP-021 follow-up nằm
+trong commit `1d4cb2d`; không có thay đổi application code nào khác.
 
 Việc triển khai thêm 8 module source dưới `src/codepilot/verification/` cùng các thay đổi tập
 trung ở agent loop, CLI, configuration, Docker runtime, Dockerfile, telemetry event list và test.
@@ -419,6 +421,8 @@ Không sửa file ngoài phạm vi Phase 4.
 | Symlink/reparse point không bị bỏ qua | PASS (unit) | `LINKED_ENTRY_DETECTED`; symlink added/replaced tests; engine FAIL non-retryable |
 | Skipped/inaccessible entry không tạo PASS | PASS (unit) | Baseline/current `listing.skipped > 0` -> `INCONCLUSIVE`/`DIFF_INCOMPLETE`; regression tests |
 | Excluded entry mới/sửa không tạo PASS | PASS (unit) | `.env`, `secrets/`, `.ssh/` mới hoặc thay đổi -> policy `EXCLUDED_ENTRY_ADDED`/`REMOVED`/`MODIFIED`, FAIL non-retryable; metadata-only, không đọc nội dung; baseline ổn định vẫn PASS |
+| Symlink trong excluded sensitive dir | PASS (unit) | `.ssh/config` là link được ghi vào `linked_paths`; `LINKED_ENTRY_DETECTED` kể cả khi link có từ baseline; FAIL non-retryable, không follow target |
+| Signature chống forged mtime | PASS (unit) | `size` + `mtime_ns` + `ctime_ns` + `dev`/`ino`/`nlink` + attributes + NTFS change-time; rewrite cùng kích thước rồi `os.utime` -> `EXCLUDED_ENTRY_MODIFIED` |
 | Verification không dựa hoàn toàn vào lời LLM | PASS (unit/architecture) | Harness chạy test và tự tính diff/verdict |
 | Timeout được áp dụng | PASS (unit) / NOT VERIFIED (Docker runtime) | Unit timeout pass; Docker timeout test bị CLI timeout trong lần Reviewer |
 | Output limit được áp dụng | PASS (unit) | Bounded buffer và redaction tests |
@@ -479,15 +483,17 @@ Vui lòng review:
    và hành vi không fallback sang Host.
 2. `src/codepilot/verification/diff.py`, `src/codepilot/tools/workspace.py` và `engine.py` về
    baseline trust, phát hiện thay đổi unauthorized, thứ tự ưu tiên policy, xử lý `INCONCLUSIVE`
-   và các fix CP-018 fail-closed cho symlink/reparse point, skipped entry và excluded entry
-   (`.env`, `secrets/`, `.ssh/`).
+   và các fix CP-018 fail-closed cho symlink/reparse point (kể cả link ẩn trong `.ssh/`,
+   `secrets/`), skipped entry, excluded entry (`.env`, `secrets/`, `.ssh/`) và chống giả mạo
+   metadata signature.
 3. `src/codepilot/agent/loop.py` về retry budget, state transition, theo dõi approved hash, lưu
    giữ bằng chứng và terminal report cho `cancel()`/`deny()`.
 4. `src/codepilot/verification/report.py` và `cli/main.py` về độ đầy đủ của report, forced
    `INCONCLUSIVE` reason và render an toàn cho `/cancel`/`/deny`.
-5. Regression tests symlink added/replaced, skipped baseline/current, excluded file/directory
-   added/modified/stable, engine fail-closed và cancel/deny report/workspace-unchanged; bảo đảm
-   test skip chỉ khi OS không tạo được symlink.
+5. Regression tests symlink added/replaced/stable-trong-baseline, skipped baseline/current,
+   excluded file/directory added/modified/stable, rewrite cùng size + restored mtime, signature
+   không khả dụng, engine fail-closed và cancel/deny report/workspace-unchanged; bảo đảm test skip
+   chỉ khi OS không tạo được symlink.
 6. Test coverage và giới hạn môi trường Docker đã ghi nhận ở trên, đặc biệt 3 lỗi Docker CLI
    timeout trong lần xác minh độc lập của Reviewer.
 
@@ -551,9 +557,9 @@ không đổi exclusion hiện có, không đọc nội dung excluded entry và 
 
 ### 12.4. Giới hạn của fix
 
-1. **Metadata signature, không phải hash nội dung.** Phát hiện thay đổi dựa trên `size` +
-   `mtime_ns`; về lý thuyết một rewrite giữ nguyên kích thước và mtime có thể không bị phát hiện,
-   nhưng muốn vậy phải cố ý chỉnh mtime. Không đọc nội dung là yêu cầu bảo mật nên không dùng hash.
+1. **Metadata signature, không phải hash nội dung.** Phát hiện thay đổi dựa trên metadata của file;
+   vòng re-review ở mục 12.6 đã tăng cường bằng `ctime`/NTFS change-time, `st_dev`/`st_ino`,
+   `nlink` và attributes. Không đọc nội dung là yêu cầu bảo mật nên không dùng hash.
 2. **Thư mục tooling/cache không được metadata-track.** `.git`, `.venv`, `__pycache__`,
    `.pytest_cache`, `node_modules`, `dist`, `build`... vẫn nằm ngoài phạm vi như trước; nếu track
    chúng, mọi test run tạo `.pytest_cache` sẽ làm verification fail. Đây là giới hạn có chủ đích,
@@ -567,6 +573,62 @@ không đổi exclusion hiện có, không đọc nội dung excluded entry và 
 - Fix finding HIGH: **PASS (unit + Docker integration trong lần chạy này)**.
 - Phase 4 acceptance: **PENDING** — chỉ Project Owner phê duyệt sau review.
 - Không bắt đầu Phase 5; không merge; không apply patch lên Host.
+
+### 12.6. Re-review vòng 2 — symlink ẩn và forged metadata
+
+**Finding 1 (HIGH):** symlink/reparse point nằm dưới excluded sensitive directory bị che. Baseline
+`.ssh/config` là symlink được ghi `ExcludedEntry(..., "link")` nhưng không vào `linked_paths`, nên
+`compare` thấy signature không đổi, `policy_violations` rỗng, `incomplete=False` và engine có thể
+`PASS`.
+
+- Fix: mọi link/reparse point trong nhánh metadata của `list_files` được thêm vào `linked_paths`;
+  `WorkspaceSnapshot` lưu `linked`; khi baseline có link, `GitDiffVerifier.compare` trả
+  `LINKED_ENTRY_DETECTED` cùng binary `FileChange` unauthorized thay vì chỉ `incomplete`.
+- Không follow target, không mở/đọc nội dung. Hệ quả có chủ đích: link có sẵn từ baseline cũng
+  `FAIL` non-retryable (trước đây baseline link chỉ cho `INCONCLUSIVE`).
+
+**Finding 2 (HIGH):** signature `file:size:mtime_ns` bị giả mạo bằng cách ghi nội dung khác cùng
+kích thước rồi `os.utime` khôi phục mtime.
+
+- Fix: `file_signature()` dùng `size`, `mtime_ns`, `ctime_ns`, `st_dev`, `st_ino`, `st_nlink` và
+  file attributes; trên Windows đọc thêm NTFS ChangeTime qua `GetFileInformationByHandleEx` trên
+  handle metadata (không đọc byte nội dung). Trên POSIX dùng `st_ctime` (change time).
+- Nếu không lấy được signature (mở file/API lỗi), entry tăng `skipped`; baseline/current không đầy
+  đủ nên verification trả `INCONCLUSIVE`, không `PASS`.
+- Không log, copy hoặc đưa nội dung secret vào report; test chỉ dùng giá trị synthetic.
+
+**Portability:**
+
+- Windows: `st_ctime` là creation time nên không đủ; ChangeTime của NTFS là bằng chứng bổ sung.
+  Nếu API/handle không khả dụng, fail closed như trên.
+- POSIX: `st_ctime` là inode change time; `os.utime` làm thay đổi ctime nên phát hiện được forged
+  mtime.
+- Filesystem không duy trì change time đáng tin cậy (một số network/FAT mount) có thể làm bằng
+  chứng yếu đi; khuyến nghị workspace local NTFS/ext4/APFS và ghi nhận đây là residual limitation.
+
+**Bằng chứng:**
+
+- RED trên code trước fix (`250a6c7^`): 4 failed, trong đó engine trả `PASS` cho cả baseline
+  symlink và forged mtime.
+- GREEN focused: `tests/unit/test_verification_diff.py` + `tests/unit/test_verification_engine.py`
+  -> **37 passed**.
+- Regression tests mới:
+  - `test_stable_baseline_sensitive_symlink_fails_closed` (`.ssh/config` link có từ baseline ->
+    `LINKED_ENTRY_DETECTED`, unauthorized, không lộ target content).
+  - `test_stable_excluded_symlink_fails_verification` (engine `FAIL` non-retryable).
+  - `test_same_size_rewrite_with_restored_mtime_is_detected` (cùng size + restored mtime ->
+    `EXCLUDED_ENTRY_MODIFIED`).
+  - `test_same_size_rewrite_with_restored_mtime_fails_verification` (engine `FAIL`).
+  - `test_unavailable_sensitive_signature_is_inconclusive` (signature API lỗi -> `INCONCLUSIVE`,
+    không PASS).
+- Full suite: **274 passed, 6 skipped**.
+- Integration: `uv run pytest -q tests/integration -rs` -> **7 passed, 6 skipped** (6 skip do
+  ripgrep không có trong môi trường); `tests/integration/test_verification_docker.py` -> **6 passed**.
+- `uv run ruff check .` -> All checks passed; `git diff --check` -> không có whitespace error.
+
+**Commit fix:** `250a6c7 fix(verification): fail closed on hidden links and forged metadata`.
+Commit cập nhật báo cáo là commit follow-up ngay sau đó. Fix cả hai finding: **PASS (unit +
+Docker integration trong lần chạy này)**; Phase 4 acceptance vẫn **PENDING**.
 
 Triển khai dừng tại đây để Architect / Reviewer review. Không bắt đầu Phase 5, không apply patch
 lên Host và không tự khẳng định phase đã được phê duyệt.
