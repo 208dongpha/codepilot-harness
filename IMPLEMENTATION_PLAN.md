@@ -1,8 +1,8 @@
 
 # CODEPILOT HARNESS — KẾ HOẠCH TRIỂN KHAI
 
-> **Trạng thái:** Phase 1 và Phase 2 APPROVED; Project Owner xác nhận Phase 3 đã hoàn thành; Phase 4 được phép triển khai
-> **Phase được phép triển khai:** Phase 4 (CP-017 đến CP-021)
+> **Trạng thái:** Phase 1–2 APPROVED; Phase 3 IMPLEMENTED theo Project Owner; Phase 4 APPROVED; Phase 5 AUTHORIZED
+> **Phase được phép triển khai:** Phase 5 (CP-022 đến CP-025)
 > **Kiến trúc:** Modular Monolith
 > **Thời gian dự kiến:** 8 tuần
 > **Người điều phối, lập kế hoạch và review:** Architect / Reviewer
@@ -1173,6 +1173,31 @@ Tăng cường bảo mật Docker và triển khai cơ chế áp dụng thay đ�
 - Phase 4 đã được phê duyệt.
 - Verification và Git diff hoạt động.
 
+## Thứ tự triển khai và checkpoint (đã duyệt 2026-11-14)
+
+1. **CP-022 — Workspace Isolation:** harden bản copy cô lập hiện có, exclusion và xử lý path. Dừng để review
+   nếu có entry không thể copy hoặc phân loại an toàn.
+2. **Checkpoint A:** chạy regression isolation/filesystem security trước khi thay đổi execution.
+3. **CP-023 — Execution Restrictions:** xác minh các Docker controls hiện có, chỉ bổ sung gap đã xác nhận;
+   thêm giới hạn CPU/bộ nhớ/timeout có thể cưỡng chế cho AST worker. Không nhân đôi controls đã có test.
+4. **Checkpoint B:** chạy unit tests và Docker tests cho limits/timeout/cleanup trước phần ghi Host.
+5. **CP-024 — Host Patch Application:** yêu cầu approval riêng cho verified final diff, xác minh lại Host snapshot
+   ngay trước khi apply, từ chối conflict và bảo đảm không để lại thay đổi một phần khi thất bại.
+6. **CP-025 — Security Testing:** kiểm tra traversal, symlink/reparse race, command injection, unauthorized
+   writes, secret/prompt injection, timeout, resource limits và cleanup.
+7. Dừng để security review độc lập. Không bắt đầu Phase 6 nếu Project Owner chưa duyệt hoặc còn Critical/High
+   finding chưa giải quyết.
+
+### Invariants Phase 5
+
+- Docker lỗi không bao giờ fallback sang Host execution.
+- Approval cho sandbox patch và approval áp dụng lên Host là hai quyền riêng, exact và single-use.
+- Host không đổi trước khi có approval áp dụng Host.
+- Bằng chứng security không đầy đủ phải fail closed; không lấy lời model làm PASS.
+- Apply patch đã duyệt theo hướng transactional; giữ nguyên file gốc nếu có thao tác thất bại.
+- Exclude secrets mà không đọc nội dung; từ chối symlink/reparse escape và filesystem race.
+- Giữ nguyên giới hạn tối đa 3 lần verification repair retry.
+
 ## Tasks
 
 ### CP-022 — Workspace Isolation
@@ -1519,12 +1544,13 @@ Chỉ release khi Project Owner phê duyệt.
 Trạng thái được cập nhật theo Project Owner:
 
 ```text
-AUTHORIZED_PHASE = 4
+AUTHORIZED_PHASE = 5
 ```
 
-Phase 1 và Phase 2 đã được phê duyệt. Project Owner xác nhận Phase 3 đã hoàn tất.
-Software Engineer chỉ triển khai Phase 4, CP-017 đến CP-021, theo chỉ thị hiện tại.
-Phase 5–8 vẫn LOCKED.
+Phase 1–2 đã được phê duyệt; Phase 3 được Project Owner xác nhận hoàn tất; Phase 4 được Project Owner
+phê duyệt ngày 2026-11-14. Project Owner ủy quyền Phase 5 ngày 2026-11-14.
+Software Engineer chỉ triển khai Phase 5, CP-022 đến CP-025, theo chỉ thị hiện tại.
+Phase 6–8 vẫn LOCKED.
 
 Không được tự chuyển phase.
 
@@ -1768,13 +1794,14 @@ KHÔNG ĐƯỢC TỰ ĐỘNG BẮT ĐẦU PHASE 2.
 | Phase 1 | APPROVED (code review) |
 | Phase 2 | APPROVED |
 | Phase 3 | IMPLEMENTED (Project Owner reports complete; approval status not asserted here) |
-| Phase 4 | AUTHORIZED — CP-017–CP-021 |
-| Phase 5 | LOCKED |
+| Phase 4 | APPROVED — Project Owner, 2026-11-14 |
+| Phase 5 | AUTHORIZED — CP-022–CP-025, Project Owner, 2026-11-14 |
 | Phase 6 | LOCKED |
 | Phase 7 | LOCKED |
 | Phase 8 | LOCKED |
 
-Chỉ Project Owner được quyền phê duyệt chuyển phase. Việc Phase 4 được ủy quyền triển khai không đồng nghĩa phase đã được nghiệm thu.
+Chỉ Project Owner được quyền phê duyệt chuyển phase. Phase 5 được ủy quyền triển khai không đồng nghĩa
+phase đã được nghiệm thu; Phase 6–8 vẫn khóa.
 
 ---
 

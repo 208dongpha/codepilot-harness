@@ -3,9 +3,9 @@
 > **Phạm vi:** chỉ CP-017 đến CP-021.
 > **Trạng thái:** Đã bổ sung TaskReport cho `/cancel` và `/deny`; các fix CP-018 fail-closed đã hoàn tất,
 > gồm excluded entries (`.env`, `secrets/`, `.ssh/`) và vòng re-review xử lý symlink ẩn trong excluded
-> directory cùng signature bị giả mạo bằng `os.utime`; xác minh độc lập trước đó ghi nhận 3 lỗi Docker
-> CLI timeout; đang chờ Architect / Reviewer review lại.
-> **Phê duyệt phase:** Không tự khẳng định. Chỉ Project Owner được phê duyệt phase.
+> directory cùng signature bị giả mạo bằng `os.utime`; đã review vòng 2 và Project Owner phê duyệt
+> Phase 4 ngày 2026-11-14. Docker CLI từng timeout ở lần xác minh trước; lần review sau đã pass.
+> **Phê duyệt phase:** Project Owner APPROVED ngày 2026-11-14.
 
 ## 1. Tóm tắt
 
@@ -431,7 +431,7 @@ Không sửa file ngoài phạm vi Phase 4.
 | Task report được tạo | PASS (unit/CLI) | Model, builder, CLI rendering và fallback report tests |
 | TaskReport cho `/cancel` và `/deny` | PASS (unit/CLI) | Verdict `INCONCLUSIVE`, reason `TASK_CANCELLED`/`PENDING_ACTION_DENIED`; host/isolated unchanged |
 | Docker integration trong full suite của Reviewer | **FAIL** | **3 failed / 246 passed / 6 skipped**; full suite sau các fix CP-018/CP-021 của implementer pass **260 passed / 6 skipped** nhưng không thay thế kết quả Reviewer |
-| Phase 4 được chấp nhận | PENDING | Cần Project Owner phê duyệt sau review |
+| Phase 4 được chấp nhận | APPROVED | Project Owner phê duyệt ngày 2026-11-14 sau review vòng 2 |
 
 ## 10. Giới hạn đã biết và vấn đề chưa giải quyết
 
@@ -571,8 +571,9 @@ không đổi exclusion hiện có, không đọc nội dung excluded entry và 
 
 - Commit fix: `10db3d8 fix(verification): fail closed on excluded sandbox entries`.
 - Fix finding HIGH: **PASS (unit + Docker integration trong lần chạy này)**.
-- Phase 4 acceptance: **PENDING** — chỉ Project Owner phê duyệt sau review.
-- Không bắt đầu Phase 5; không merge; không apply patch lên Host.
+- Phase 4 acceptance: **APPROVED** — Project Owner phê duyệt ngày 2026-11-14 sau review vòng 2.
+- Phase 5: **AUTHORIZED** bởi Project Owner ngày 2026-11-14; triển khai chỉ bắt đầu sau handoff riêng.
+- Không merge; không apply patch lên Host trong Phase 4.
 
 ### 12.6. Re-review vòng 2 — symlink ẩn và forged metadata
 
@@ -628,7 +629,7 @@ kích thước rồi `os.utime` khôi phục mtime.
 
 **Commit fix:** `250a6c7 fix(verification): fail closed on hidden links and forged metadata`.
 Commit cập nhật báo cáo là commit follow-up ngay sau đó. Fix cả hai finding: **PASS (unit +
-Docker integration trong lần chạy này)**; Phase 4 acceptance vẫn **PENDING**.
+Docker integration trong lần chạy này)**; Project Owner phê duyệt Phase 4 ngày 2026-11-14.
 
-Triển khai dừng tại đây để Architect / Reviewer review. Không bắt đầu Phase 5, không apply patch
-lên Host và không tự khẳng định phase đã được phê duyệt.
+Phase 4 đã được Project Owner phê duyệt ngày 2026-11-14. Phase 5 được ủy quyền riêng ngày cùng ngày;
+báo cáo này không tự nghiệm thu Phase 5. Không merge và không áp dụng patch lên Host trong phạm vi Phase 4.

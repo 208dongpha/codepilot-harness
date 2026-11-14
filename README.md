@@ -569,8 +569,9 @@ Current status:
 - Phase 1 implementation: Approved.
 - Phase 2 implementation: Approved.
 - Phase 3 implementation: Complete per Project Owner; review/approval is not asserted here.
-- Phase 4 (Verification & Recovery): Authorized for CP-017–CP-021.
-- Phase 5–8: Locked until separately authorized.
+- Phase 4 (Verification & Recovery): Approved by the Project Owner on 2026-11-14.
+- Phase 5 (Sandbox Hardening): Authorized for CP-022–CP-025 on 2026-11-14.
+- Phase 6–8: Locked until separately authorized.
 
 The implementation must follow `IMPLEMENTATION_PLAN.md`.
 

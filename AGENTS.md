@@ -94,9 +94,9 @@ Phase 3 delivered tasks (historical):
 - CP-015: Patch Tool.
 - CP-016: CLI Approval.
 
-**Phase 4 — Verification & Recovery: AUTHORIZED**
+**Phase 4 — Verification & Recovery: APPROVED by Project Owner (2026-11-14)**
 
-Authorized Phase 4 tasks:
+Phase 4 tasks delivered and reviewed:
 
 - CP-017: Test Runner.
 - CP-018: Git Diff Verification.
@@ -104,19 +104,32 @@ Authorized Phase 4 tasks:
 - CP-020: Bounded Self-Correction (maximum 3 repair retries).
 - CP-021: Task Report.
 
-**Phase 5–8: LOCKED**
+**Phase 5 — Sandbox Hardening: AUTHORIZED by Project Owner (2026-11-14)**
+
+Authorized Phase 5 tasks:
+
+- CP-022: Workspace Isolation.
+- CP-023: Execution Restrictions, including bounded AST worker isolation.
+- CP-024: Host Patch Application after separate explicit approval.
+- CP-025: Security Testing.
+
+**Phase 6–8: LOCKED**
 
 ### Scope Restrictions
 
-During Phase 4:
+Phase 4 is complete and approved. Its historical scope restrictions remain documented in
+`IMPLEMENTATION_PLAN.md`.
 
-- Implement only CP-017–CP-021, preserving Phase 1–3 behavior.
-- Keep test execution in the existing Docker sandbox; no fallback to Host execution.
-- Verify sandbox changes against a trusted baseline and identify unauthorized changes.
-- Treat verification as evidence-based: test results, diff, and policy compliance; LLM claims alone are insufficient.
-- Enforce the maximum of 3 repair retries and stop on exhausted budget, cancellation, or unsafe/unauthorized changes.
-- Do not implement Phase 5 sandbox hardening or host patch application, Phase 6 persistence, or unrelated features.
-- Do not begin Phase 5 without explicit authorization.
+During Phase 5:
+
+- Implement only CP-022–CP-025, preserving Phases 1–4 behavior.
+- Keep untrusted test execution in Docker; never fall back to Host execution.
+- Do not apply changes to Host before a separate, exact approval of the verified final diff.
+- Revalidate Host state and reject stale snapshots, conflicts, traversal, symlinks, and partial writes.
+- Fail closed when workspace isolation or security evidence is incomplete.
+- Reuse existing Docker restrictions where verified; do not duplicate controls unnecessarily.
+- Do not implement Phase 6 persistence or unrelated features.
+- Stop for security review before Phase 6; Critical or High findings must be resolved.
 
 Phase-specific authorization must be updated when the Project Owner approves the next phase.
 
