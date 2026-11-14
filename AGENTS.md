@@ -471,6 +471,7 @@ At the end of each authorized phase, produce an implementation report.
 For the active phase, create the matching report, including:
 
 - `docs/PHASE_4_IMPLEMENTATION_REPORT.md` for Phase 4.
+- `docs/PHASE_5_IMPLEMENTATION_REPORT.md` for Phase 5.
 
 ### Required Report Sections
 
