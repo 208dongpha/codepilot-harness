@@ -9,7 +9,6 @@ import hashlib
 import json
 import os
 import stat
-import tempfile
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -17,9 +16,15 @@ from pathlib import Path
 from threading import Lock
 from typing import Literal
 
+from codepilot.patch.guard import (
+    GuardConflict,
+    GuardedPath,
+    GuardIO,
+    GuardUnsupported,
+)
 from codepilot.patch.tool import PatchError, safe_parts
 from codepilot.tools.base import ToolError
-from codepilot.tools.workspace import Workspace, linked
+from codepilot.tools.workspace import Workspace
 from codepilot.verification.models import DiffReport
 
 
@@ -202,16 +207,14 @@ class HostPatchApplier:
             self._created_dirs = []
             try:
                 self._commit(plan)
-                for entry in plan.entries:
-                    if entry.change == "deleted":
-                        if self._host_exists(entry.path):
-                            raise HostPatchError("HOST_APPLY_FAILED")
-                    elif self._host_text(entry.path)[0] != entry.new_sha256:
-                        raise HostPatchError("HOST_APPLY_FAILED")
+                self._verify_applied(plan)
             except Exception as exc:
+                if isinstance(exc, HostPatchError) and str(exc) == "HOST_UNSUPPORTED":
+                    raise
                 self._rollback(plan, backups)
                 if isinstance(exc, HostPatchError) and str(exc) in {
-                    "HOST_ROLLBACK_FAILED",
+                    "HOST_CONFLICT",
+                    "HOST_UNSUPPORTED",
                     "HOST_PLAN_TAMPERED",
                 }:
                     raise
@@ -240,106 +243,108 @@ class HostPatchApplier:
     def _commit(self, plan: HostPatchPlan) -> None:
         for entry in plan.entries:
             if entry.change == "deleted":
-                self._delete(entry.path)
+                self._delete_entry(entry)
             else:
                 self._write_entry(entry)
 
     def _write_entry(self, entry: HostPatchEntry) -> None:
-        target, created = self._prepare_target(entry.path)
-        self._created_dirs.extend(created)
-        mode = 0o644 if entry.change == "added" else self._host_mode(entry.path)
-        self._atomic_write(target, entry.content or "", mode)
+        try:
+            with GuardedPath(self.host.root, safe_parts(entry.path)) as guard:
+                self._created_dirs.extend(guard.created_dirs)
+                if guard.sha256(self.host.config.max_file_bytes) != entry.expected_sha256:
+                    raise HostPatchError("HOST_CONFLICT")
+                mode = 0o644 if entry.expected_sha256 is None else self._host_mode(entry.path)
+                guard.write(entry.content or "", mode)
+        except PatchError:
+            raise HostPatchError("HOST_CONFLICT") from None
+        except GuardUnsupported:
+            raise HostPatchError("HOST_UNSUPPORTED") from None
+        except GuardConflict:
+            raise HostPatchError("HOST_CONFLICT") from None
+        except GuardIO:
+            raise HostPatchError("HOST_APPLY_FAILED") from None
+
+    def _delete_entry(self, entry: HostPatchEntry) -> None:
+        try:
+            with GuardedPath(self.host.root, safe_parts(entry.path)) as guard:
+                self._created_dirs.extend(guard.created_dirs)
+                if guard.sha256(self.host.config.max_file_bytes) != entry.expected_sha256:
+                    raise HostPatchError("HOST_CONFLICT")
+                guard.unlink()
+        except PatchError:
+            raise HostPatchError("HOST_CONFLICT") from None
+        except GuardUnsupported:
+            raise HostPatchError("HOST_UNSUPPORTED") from None
+        except GuardConflict:
+            raise HostPatchError("HOST_CONFLICT") from None
+        except GuardIO:
+            raise HostPatchError("HOST_APPLY_FAILED") from None
+
+    def _verify_applied(self, plan: HostPatchPlan) -> None:
+        for entry in plan.entries:
+            try:
+                with GuardedPath(self.host.root, safe_parts(entry.path)) as guard:
+                    current = guard.sha256(self.host.config.max_file_bytes)
+            except (GuardUnsupported, GuardConflict, GuardIO, PatchError):
+                raise HostPatchError("HOST_APPLY_FAILED") from None
+            if entry.change == "deleted":
+                if current is not None:
+                    raise HostPatchError("HOST_APPLY_FAILED")
+            elif current != entry.new_sha256:
+                raise HostPatchError("HOST_APPLY_FAILED")
 
     def _rollback(self, plan: HostPatchPlan, backups: dict[str, tuple[str, int]]) -> None:
+        conflicts: list[str] = []
         failures: list[str] = []
         for entry in reversed(plan.entries):
             try:
-                if entry.change == "added":
-                    if self._host_exists(entry.path):
-                        os.unlink(self.host.root.joinpath(*safe_parts(entry.path)))
-                else:
-                    content, mode = backups[entry.path]
-                    target = self.host.root.joinpath(*safe_parts(entry.path))
-                    self._atomic_write(target, content, mode)
-            except (HostPatchError, OSError, KeyError, PatchError):
+                status = self._restore_entry(entry, backups.get(entry.path))
+            except (GuardUnsupported, GuardConflict, GuardIO, HostPatchError, PatchError, OSError):
                 failures.append(entry.path)
+                continue
+            if status == "conflict":
+                conflicts.append(entry.path)
         for directory in reversed(self._created_dirs):
             try:
                 directory.rmdir()
             except OSError:
                 pass
-        for entry in plan.entries:
-            try:
-                if entry.expected_sha256 is None:
-                    if self._host_exists(entry.path):
-                        failures.append(entry.path)
-                elif not self._host_exists(entry.path):
-                    failures.append(entry.path)
-                elif self._host_text(entry.path)[0] != entry.expected_sha256:
-                    failures.append(entry.path)
-            except HostPatchError:
-                failures.append(entry.path)
         if failures:
             raise HostPatchError("HOST_ROLLBACK_FAILED") from None
+        if conflicts:
+            raise HostPatchError("HOST_ROLLBACK_CONFLICT") from None
 
-    def _delete(self, path: str) -> None:
-        try:
-            target = self.host.root.joinpath(*safe_parts(path))
-            info = target.lstat()
-            if linked(info) or not stat.S_ISREG(info.st_mode) or info.st_nlink > 1:
-                raise HostPatchError("HOST_CONFLICT")
-            target.unlink()
-        except (OSError, PatchError):
-            raise HostPatchError("HOST_APPLY_FAILED") from None
-
-    def _prepare_target(self, path: str) -> tuple[Path, list[Path]]:
-        try:
-            parts = safe_parts(path)
-        except PatchError:
-            raise HostPatchError("HOST_CONFLICT") from None
-        current = self.host.root
-        created: list[Path] = []
-        try:
-            for part in parts[:-1]:
-                current = current / part
-                if not os.path.lexists(current):
-                    os.mkdir(current)
-                    created.append(current)
-                info = current.lstat()
-                if linked(info) or not stat.S_ISDIR(info.st_mode):
-                    raise HostPatchError("HOST_CONFLICT")
-                if not current.resolve(strict=True).is_relative_to(self.host.root):
-                    raise HostPatchError("HOST_CONFLICT")
-            target = self.host.root.joinpath(*parts)
-            if os.path.lexists(target):
-                info = target.lstat()
-                if linked(info) or not stat.S_ISREG(info.st_mode) or info.st_nlink > 1:
-                    raise HostPatchError("HOST_CONFLICT")
-            return target, created
-        except HostPatchError:
-            for directory in reversed(created):
-                try:
-                    directory.rmdir()
-                except OSError:
-                    pass
-            raise
-        except OSError:
-            raise HostPatchError("HOST_APPLY_FAILED") from None
-
-    def _atomic_write(self, target: Path, content: str, mode: int) -> None:
-        fd, temporary = tempfile.mkstemp(prefix=".codepilot-apply-", dir=target.parent)
-        temp_path = Path(temporary)
-        try:
-            with os.fdopen(fd, "wb") as handle:
-                handle.write(content.encode("utf-8"))
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.chmod(temp_path, mode & 0o777)
-            os.replace(temp_path, target)
-        except OSError:
-            raise HostPatchError("HOST_APPLY_FAILED") from None
-        finally:
-            temp_path.unlink(missing_ok=True)
+    def _restore_entry(
+        self, entry: HostPatchEntry, backup: tuple[str, int] | None
+    ) -> Literal["conflict"] | None:
+        with GuardedPath(self.host.root, safe_parts(entry.path)) as guard:
+            self._created_dirs.extend(guard.created_dirs)
+            current = guard.read_text(self.host.config.max_file_bytes)
+            if entry.change == "added":
+                new_text = entry.content or ""
+                if current is None:
+                    return None
+                if current != new_text:
+                    return "conflict"
+                guard.unlink()
+                return None
+            if backup is None:
+                return "conflict"
+            backup_text, backup_mode = backup
+            if entry.change == "modified":
+                new_text = entry.content or ""
+                if current == backup_text:
+                    return None
+                if current is None or current != new_text:
+                    return "conflict"
+                guard.write(backup_text, backup_mode)
+                return None
+            if current is None:
+                guard.write(backup_text, backup_mode)
+                return None
+            if current == backup_text:
+                return None
+            return "conflict"
 
     def _host_exists(self, path: str) -> bool:
         try:
