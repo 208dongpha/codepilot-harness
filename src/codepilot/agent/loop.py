@@ -101,6 +101,10 @@ class AgentLoop:
             },
         ]
 
+    @property
+    def authorized_hashes(self) -> dict[str, str | None]:
+        return dict(self._authorized)
+
     async def start(self, task: str) -> AgentRunResult:
         if self.state.status is not AgentStatus.CREATED:
             raise RuntimeError("Agent loop has already started.")

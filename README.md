@@ -159,6 +159,8 @@ Planned commands:
 | `/approve` | Approve a pending action |
 | `/deny` | Reject a pending action |
 | `/cancel` | Cancel the active or pending task |
+| `/apply <plan-id>` | Apply exactly one verified host diff |
+| `/discard` | Discard pending host changes |
 
 `/approve` chỉ chấp nhận action đang chờ với đúng tool, arguments, target và operation.
 Approval chỉ dùng một lần; `/deny` và `/cancel` không ghi file.

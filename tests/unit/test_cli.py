@@ -6,6 +6,7 @@ from typer.testing import CliRunner
 from codepilot.agent.loop import AgentRunResult
 from codepilot.agent.state import AgentState, AgentStatus
 from codepilot.cli.main import app
+from codepilot.patch.host import HostApplyResult, HostPatchError, HostPatchPlan
 from codepilot.patch.tool import PatchProposal
 from codepilot.permissions.engine import PermissionEngine
 from codepilot.verification.models import (
@@ -219,3 +220,100 @@ def test_cancel_emits_inconclusive_task_report():
     assert "Remaining issues: TASK_CANCELLED" in result.output
     loop.cancel.assert_called_once()
     loop.deny.assert_not_called()
+
+
+def _host_plan() -> HostPatchPlan:
+    return HostPatchPlan(
+        plan_id="a" * 64,
+        diff="--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-value = 1\n+value = 2\n",
+        entries=(),
+    )
+
+
+def _completed_host_loop(plan: HostPatchPlan):
+    verification = VerificationResult(
+        verdict=VerificationVerdict.PASS, diff=DiffReport()
+    )
+    state = AgentState(status=AgentStatus.COMPLETED)
+
+    async def start(task):
+        return AgentRunResult(state=state, response="done", verification=verification)
+
+    return SimpleNamespace(
+        state=state,
+        permissions=PermissionEngine(),
+        verifier=SimpleNamespace(baseline_hashes=lambda: {}),
+        authorized_hashes={},
+        start=start,
+    )
+
+
+def test_host_apply_requires_exact_plan_id_and_is_single_use():
+    plan = _host_plan()
+    loop = _completed_host_loop(plan)
+    with (
+        patch("codepilot.cli.main.GeminiProvider") as factory,
+        patch("codepilot.cli.main._create_agent_loop", return_value=loop),
+        patch("codepilot.cli.main.HostPatchApplier.begin_task"),
+        patch("codepilot.cli.main.HostPatchApplier.prepare", return_value=plan),
+        patch("codepilot.cli.main.HostPatchApplier.approve") as approve,
+        patch(
+            "codepilot.cli.main.HostPatchApplier.apply",
+            return_value=HostApplyResult(plan.plan_id, ("app.py",)),
+        ) as apply,
+    ):
+        factory.return_value.close = AsyncMock()
+        result = runner.invoke(
+            app, input=f"change app\n/apply {'b' * 64}\n/apply {plan.plan_id}\n/exit\n"
+        )
+
+    assert result.exit_code == 0
+    assert plan.plan_id in result.output
+    assert "Plan ID mismatch. Host unchanged." in result.output
+    assert "Host apply: PASS (1 files)" in result.output
+    approve.assert_called_once_with(plan.plan_id)
+    apply.assert_called_once_with(plan.plan_id)
+
+
+def test_pending_host_plan_blocks_new_tasks_until_discard():
+    plan = _host_plan()
+    loop = _completed_host_loop(plan)
+    with (
+        patch("codepilot.cli.main.GeminiProvider") as factory,
+        patch("codepilot.cli.main._create_agent_loop", return_value=loop),
+        patch("codepilot.cli.main.HostPatchApplier.begin_task"),
+        patch("codepilot.cli.main.HostPatchApplier.prepare", return_value=plan),
+        patch("codepilot.cli.main.HostPatchApplier.discard") as discard,
+    ):
+        factory.return_value.close = AsyncMock()
+        result = runner.invoke(
+            app, input="change app\nanother task\n/discard\n/exit\n"
+        )
+
+    assert result.exit_code == 0
+    assert "Resolve pending host changes with" in result.output
+    assert "Host changes discarded. Host unchanged." in result.output
+    discard.assert_called_once()
+    assert result.output.count("Assistant> done") == 1
+
+
+def test_host_apply_conflict_reports_failure_and_clears_plan():
+    plan = _host_plan()
+    loop = _completed_host_loop(plan)
+    with (
+        patch("codepilot.cli.main.GeminiProvider") as factory,
+        patch("codepilot.cli.main._create_agent_loop", return_value=loop),
+        patch("codepilot.cli.main.HostPatchApplier.begin_task"),
+        patch("codepilot.cli.main.HostPatchApplier.prepare", return_value=plan),
+        patch("codepilot.cli.main.HostPatchApplier.approve"),
+        patch(
+            "codepilot.cli.main.HostPatchApplier.apply",
+            side_effect=HostPatchError("HOST_CONFLICT"),
+        ),
+    ):
+        factory.return_value.close = AsyncMock()
+        result = runner.invoke(app, input=f"change app\n/apply {plan.plan_id}\n/exit\n")
+
+    assert result.exit_code == 0
+    assert "Host apply: FAIL - HOST_CONFLICT" in result.output
+    assert "Host unchanged or restored." in result.output

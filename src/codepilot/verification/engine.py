@@ -1,3 +1,4 @@
+import hashlib
 from collections.abc import Mapping
 from typing import Protocol
 
@@ -22,6 +23,8 @@ class Verifier(Protocol):
     def verify(self, authorized: Mapping[str, str | None]) -> VerificationResult: ...
 
     def diff_report(self, authorized: Mapping[str, str | None]) -> DiffReport: ...
+
+    def baseline_hashes(self) -> Mapping[str, str]: ...
 
 
 class VerificationEngine:
@@ -56,6 +59,14 @@ class VerificationEngine:
         if self._baseline is None:
             raise VerificationError("Baseline has not been prepared.")
         return self.differ.compare(self._baseline, authorized)
+
+    def baseline_hashes(self) -> Mapping[str, str]:
+        if self._baseline is None:
+            raise VerificationError("Baseline has not been prepared.")
+        return {
+            path: hashlib.sha256(text.encode("utf-8")).hexdigest()
+            for path, text in self._baseline.contents.items()
+        }
 
     def _evaluate(self, test: TestExecution, diff: DiffReport) -> VerificationResult:
         reasons: list[str] = []

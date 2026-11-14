@@ -13,6 +13,7 @@ from codepilot.context.repository_map import RepositoryMapper
 from codepilot.context.token_budget import TokenBudget
 from codepilot.execution.docker_runtime import DockerError, DockerRuntime
 from codepilot.llm.gemini import GeminiProvider
+from codepilot.patch.host import HostPatchApplier, HostPatchError, HostPatchPlan
 from codepilot.patch.tool import IsolatedWorkspace, PatchError, PatchTool
 from codepilot.permissions.engine import PermissionEngine, PermissionError
 from codepilot.telemetry.logging import configure_logging
@@ -20,6 +21,7 @@ from codepilot.tools.factory import create_read_only_registry
 from codepilot.tools.workspace import Workspace
 from codepilot.verification.diff import GitDiffVerifier
 from codepilot.verification.engine import VerificationEngine
+from codepilot.verification.models import VerificationVerdict
 from codepilot.verification.redaction import bound_and_redact
 from codepilot.verification.report import TaskReport
 from codepilot.verification.test_runner import DockerTestRunner
@@ -41,6 +43,11 @@ async def chat(config: Config) -> None:
     try:
         workspace = Workspace(config.repository)
         isolated = IsolatedWorkspace.create(workspace)
+        isolated_workspace = Workspace(
+            config.repository.model_copy(update={"workspace": isolated.root})
+        )
+        host_apply = HostPatchApplier(workspace, isolated_workspace)
+        pending_host: HostPatchPlan | None = None
         current: AgentLoop | None = None
         while True:
             try:
@@ -54,8 +61,10 @@ async def chat(config: Config) -> None:
             if text == "/help":
                 show(
                     "/help - Commands\n/status - Session status\n"
-                    "/approve - Approve the exact pending patch\n"
-                    "/deny - Deny the pending patch\n/cancel - Cancel the active task\n/exit - Exit"
+                    "/approve - Approve the exact pending sandbox patch\n"
+                    "/deny - Deny the pending sandbox patch\n/cancel - Cancel the active task\n"
+                    "/apply <plan-id> - Apply exactly one verified host diff\n"
+                    "/discard - Discard pending host changes\n/exit - Exit"
                 )
             elif text == "/status":
                 available = DockerRuntime(config.sandbox).available()
@@ -91,6 +100,34 @@ async def chat(config: Config) -> None:
                 show("Pending action denied. No files were changed.")
                 _show_agent_result(result)
                 current = None
+            elif text.startswith("/apply"):
+                if pending_host is None:
+                    show("No host changes pending.")
+                    continue
+                plan_id = text.removeprefix("/apply").strip()
+                if not plan_id:
+                    show(f"Usage: /apply {pending_host.plan_id}")
+                    continue
+                if plan_id != pending_host.plan_id:
+                    show("Plan ID mismatch. Host unchanged.")
+                    continue
+                try:
+                    host_apply.approve(plan_id)
+                    applied = host_apply.apply(plan_id)
+                except HostPatchError as exc:
+                    host_apply.discard()
+                    pending_host = None
+                    show(f"Host apply: FAIL - {exc}. Host unchanged or restored.")
+                    continue
+                pending_host = None
+                show(f"Host apply: PASS ({len(applied.files)} files)")
+            elif text == "/discard":
+                if pending_host is None:
+                    show("No host changes pending.")
+                    continue
+                host_apply.discard()
+                pending_host = None
+                show("Host changes discarded. Host unchanged.")
             elif text == "/cancel":
                 if current is None:
                     show("No active task.")
@@ -105,10 +142,45 @@ async def chat(config: Config) -> None:
                 if current is not None:
                     show("Resolve the pending action with /approve, /deny, or /cancel.")
                     continue
+                if pending_host is not None:
+                    show(
+                        "Resolve pending host changes with "
+                        f"/apply {pending_host.plan_id} or /discard."
+                    )
+                    continue
+                host_ready = True
+                try:
+                    host_apply.begin_task()
+                except HostPatchError as exc:
+                    host_ready = False
+                    show(f"Host apply unavailable: {exc}. Host will not be modified.")
                 current = _create_agent_loop(config, provider, workspace, isolated)
                 result = await current.start(text)
                 _show_agent_result(result)
                 if result.state.status is not AgentStatus.WAITING_APPROVAL:
+                    if (
+                        host_ready
+                        and result.state.status is AgentStatus.COMPLETED
+                        and result.verification is not None
+                        and result.verification.verdict is VerificationVerdict.PASS
+                        and current.verifier is not None
+                    ):
+                        try:
+                            pending_host = host_apply.prepare(
+                                result.verification.diff,
+                                current.verifier.baseline_hashes(),
+                                current.authorized_hashes,
+                            )
+                        except HostPatchError as exc:
+                            pending_host = None
+                            show(f"Host apply unavailable: {exc}. Host will not be modified.")
+                        if pending_host is not None:
+                            show(
+                                f"Host changes pending (plan {pending_host.plan_id}):\n"
+                                f"{pending_host.diff}\n"
+                                f"Use /apply {pending_host.plan_id} to apply exactly this diff, "
+                                "or /discard."
+                            )
                     current = None
     finally:
         await provider.close()
