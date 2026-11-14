@@ -13,7 +13,7 @@ from codepilot.context.repository_map import RepositoryMapper
 from codepilot.context.token_budget import TokenBudget
 from codepilot.execution.docker_runtime import DockerError, DockerRuntime
 from codepilot.llm.gemini import GeminiProvider
-from codepilot.patch.tool import IsolatedWorkspace, PatchTool
+from codepilot.patch.tool import IsolatedWorkspace, PatchError, PatchTool
 from codepilot.permissions.engine import PermissionEngine, PermissionError
 from codepilot.telemetry.logging import configure_logging
 from codepilot.tools.factory import create_read_only_registry
@@ -32,15 +32,16 @@ logger = logging.getLogger("codepilot")
 
 async def chat(config: Config) -> None:
     provider = GeminiProvider(config)
-    workspace = Workspace(config.repository)
-    isolated = IsolatedWorkspace.create(workspace)
-    current: AgentLoop | None = None
+    isolated: IsolatedWorkspace | None = None
     show(
         f"CodePilot Harness v{__version__}\nProvider: Gemini\n"
         f"Model: {display_model(config.llm.model)}"
     )
     show("Type /help to see available commands.")
     try:
+        workspace = Workspace(config.repository)
+        isolated = IsolatedWorkspace.create(workspace)
+        current: AgentLoop | None = None
         while True:
             try:
                 text = input("codepilot> ").strip()
@@ -111,7 +112,8 @@ async def chat(config: Config) -> None:
                     current = None
     finally:
         await provider.close()
-        isolated.close()
+        if isolated is not None:
+            isolated.close()
         show("Goodbye!")
 
 
@@ -209,6 +211,10 @@ def main(ctx: typer.Context) -> None:
     except ConfigurationError as exc:
         logger.error("configuration_error")
         show(str(exc))
+        raise typer.Exit(1) from None
+    except PatchError as exc:
+        logger.error("workspace_isolation_error")
+        show(f"Workspace isolation failed: {exc}")
         raise typer.Exit(1) from None
     except KeyboardInterrupt:
         show("Goodbye!")

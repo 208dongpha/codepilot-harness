@@ -18,11 +18,62 @@ class PatchError(RuntimeError):
     pass
 
 
+_OMITTED_SOURCE = frozenset({"BINARY_FILE", "FILE_TOO_LARGE", "SENSITIVE_CONTENT"})
+
+
+def _write_isolated(root: Path, target: Path, content: str, source_mode: int) -> None:
+    relative = target.relative_to(root)
+    current = root
+    try:
+        for part in relative.parts[:-1]:
+            current = current / part
+            try:
+                os.mkdir(current)
+            except FileExistsError:
+                pass
+            info = current.lstat()
+            if linked(info) or not stat.S_ISDIR(info.st_mode):
+                raise PatchError("ISOLATION_INCOMPLETE")
+            if not current.resolve(strict=True).is_relative_to(root):
+                raise PatchError("ISOLATION_INCOMPLETE")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        flags |= getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(target, flags, 0o600)
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(content.encode("utf-8"))
+                handle.flush()
+                os.fsync(handle.fileno())
+        except BaseException:
+            target.unlink(missing_ok=True)
+            raise
+        os.chmod(target, 0o755 if source_mode & 0o111 else 0o644)
+    except PatchError:
+        raise
+    except OSError:
+        raise PatchError("ISOLATION_INCOMPLETE") from None
+
+
+def _verify_copy(workspace: Workspace, copied: dict[str, str]) -> None:
+    listing = workspace.list_files()
+    if listing.truncated or listing.skipped or listing.linked_paths:
+        raise PatchError("ISOLATION_INCOMPLETE")
+    if set(listing.paths) != set(copied):
+        raise PatchError("ISOLATION_INCOMPLETE")
+    for relative, digest in copied.items():
+        try:
+            content = workspace.read_text(relative)
+        except ToolError:
+            raise PatchError("ISOLATION_INCOMPLETE") from None
+        if _sha256(content) != digest:
+            raise PatchError("ISOLATION_INCOMPLETE")
+
+
 def _sha256(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
-def _safe_parts(relative: str) -> tuple[str, ...]:
+def safe_parts(relative: str) -> tuple[str, ...]:
     windows = PureWindowsPath(relative)
     parts = tuple(relative.replace("\\", "/").split("/"))
     if (
@@ -45,6 +96,8 @@ class IsolatedWorkspace:
         self.root = root
         self._temporary = temporary
         self._closed = False
+        self.copied = 0
+        self.omitted = 0
 
     @classmethod
     def create(cls, host: Workspace) -> "IsolatedWorkspace":
@@ -55,15 +108,35 @@ class IsolatedWorkspace:
         try:
             if root.resolve().is_relative_to(host.root):
                 raise PatchError("INVALID_ISOLATION")
-            for relative in host.list_files().paths:
+            listing = host.list_files()
+            if listing.truncated or listing.skipped:
+                raise PatchError("ISOLATION_INCOMPLETE")
+            copied: dict[str, str] = {}
+            omitted = 0
+            total = 0
+            for relative in listing.paths:
+                target = root.joinpath(*safe_parts(relative))
                 try:
                     content = host.read_text(relative)
-                except ToolError:
-                    continue
-                target = root.joinpath(*_safe_parts(relative))
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(content, encoding="utf-8", newline="")
-            return cls(root.resolve(strict=True), temporary)
+                    source_mode = stat.S_IMODE(host.resolve(relative).stat().st_mode)
+                except ToolError as exc:
+                    if exc.code in _OMITTED_SOURCE:
+                        omitted += 1
+                        continue
+                    raise PatchError("ISOLATION_INCOMPLETE") from None
+                total += len(content.encode("utf-8"))
+                if total > host.config.max_total_bytes:
+                    raise PatchError("ISOLATION_TOO_LARGE")
+                _write_isolated(root, target, content, source_mode)
+                copied[relative] = _sha256(content)
+            workspace = cls(root.resolve(strict=True), temporary)
+            workspace.copied = len(copied)
+            workspace.omitted = omitted
+            _verify_copy(
+                Workspace(host.config.model_copy(update={"workspace": workspace.root})),
+                copied,
+            )
+            return workspace
         except Exception:
             temporary.cleanup()
             raise
@@ -194,7 +267,7 @@ class PatchTool:
         current: str | None,
         content: str | None,
     ) -> PatchProposal:
-        _safe_parts(target)
+        safe_parts(target)
         if content is not None:
             if len(content) > self.max_content_chars:
                 raise PatchError("OUTPUT_LIMIT")
@@ -216,7 +289,7 @@ class PatchTool:
         )
 
     def _target(self, relative: str, *, allow_missing: bool = False) -> Path:
-        parts = _safe_parts(relative)
+        parts = safe_parts(relative)
         path = self.workspace.root
         try:
             for index, part in enumerate(parts):
@@ -241,7 +314,7 @@ class PatchTool:
             raise PatchError("UNSAFE_TARGET") from None
 
     def _ensure_parent_directories(self, relative: str) -> None:
-        parts = _safe_parts(relative)
+        parts = safe_parts(relative)
         current = self.workspace.root
         try:
             for part in parts[:-1]:

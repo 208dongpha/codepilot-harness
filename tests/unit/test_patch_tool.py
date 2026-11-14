@@ -1,4 +1,8 @@
 import hashlib
+import os
+import stat
+import tempfile
+from pathlib import Path
 from threading import Event, Thread
 
 import pytest
@@ -6,7 +10,8 @@ import pytest
 from codepilot.config import RepositoryConfig
 from codepilot.patch.tool import IsolatedWorkspace, PatchError, PatchTool
 from codepilot.permissions.engine import PermissionEngine, PermissionError
-from codepilot.tools.workspace import Workspace
+from codepilot.tools.base import ToolError
+from codepilot.tools.workspace import FileListing, Workspace
 
 
 @pytest.fixture
@@ -207,3 +212,120 @@ def test_concurrent_apply_attempt_is_rejected(isolated, monkeypatch):
     release.set()
     thread.join(2)
     assert not thread.is_alive()
+
+
+def test_copy_omits_non_text_and_sensitive_sources_without_reading_them(tmp_path, monkeypatch):
+    host = tmp_path / "host"
+    host.mkdir()
+    (host / "app.py").write_text("value = 1\n", encoding="utf-8")
+    (host / ".env").write_text("GEMINI_API_KEY=synthetic\n", encoding="utf-8")
+    (host / "binary.py").write_bytes(b"\x00\x01")
+    (host / "leak.py").write_text(
+        'password = "synthetic-private-value"\n', encoding="utf-8"
+    )
+    (host / "large.py").write_bytes(b"x" * (RepositoryConfig().max_file_bytes + 1))
+    workspace = Workspace(RepositoryConfig(workspace=host))
+    read: list[str] = []
+    real_read = workspace.read_text
+
+    def recording_read(relative):
+        read.append(relative)
+        return real_read(relative)
+
+    monkeypatch.setattr(workspace, "read_text", recording_read)
+
+    isolated = IsolatedWorkspace.create(workspace)
+    try:
+        assert isolated.copied == 1
+        assert isolated.omitted == 3
+        assert read == ["app.py", "binary.py", "large.py", "leak.py"]
+        assert (isolated.root / "app.py").read_text(encoding="utf-8") == "value = 1\n"
+        assert not (isolated.root / ".env").exists()
+        assert not (isolated.root / "binary.py").exists()
+        assert not (isolated.root / "secret.py").exists()
+    finally:
+        isolated.close()
+
+
+def test_copy_fails_closed_when_a_listed_file_cannot_be_read(tmp_path, monkeypatch):
+    host = tmp_path / "host"
+    host.mkdir()
+    (host / "app.py").write_text("value = 1\n", encoding="utf-8")
+    workspace = Workspace(RepositoryConfig(workspace=host))
+    monkeypatch.setattr(
+        workspace,
+        "read_text",
+        lambda relative: (_ for _ in ()).throw(ToolError("PERMISSION_DENIED")),
+    )
+    pattern = "codepilot-isolated-*"
+    before = set(Path(tempfile.gettempdir()).glob(pattern))
+
+    with pytest.raises(PatchError, match="ISOLATION_INCOMPLETE"):
+        IsolatedWorkspace.create(workspace)
+
+    assert set(Path(tempfile.gettempdir()).glob(pattern)) == before
+
+
+@pytest.mark.parametrize("truncated,skipped", [(True, 0), (False, 1)])
+def test_copy_fails_closed_on_incomplete_listing(tmp_path, monkeypatch, truncated, skipped):
+    host = tmp_path / "host"
+    host.mkdir()
+    (host / "app.py").write_text("value = 1\n", encoding="utf-8")
+    workspace = Workspace(RepositoryConfig(workspace=host))
+    monkeypatch.setattr(
+        workspace,
+        "list_files",
+        lambda *args, **kwargs: FileListing(
+            ["app.py"], truncated=truncated, skipped=skipped
+        ),
+    )
+
+    with pytest.raises(PatchError, match="ISOLATION_INCOMPLETE"):
+        IsolatedWorkspace.create(workspace)
+
+
+def test_copy_rejects_a_listing_path_that_escapes(tmp_path, monkeypatch):
+    host = tmp_path / "host"
+    host.mkdir()
+    (tmp_path / "outside.py").write_text("outside\n", encoding="utf-8")
+    workspace = Workspace(RepositoryConfig(workspace=host))
+    monkeypatch.setattr(
+        workspace,
+        "list_files",
+        lambda *args, **kwargs: FileListing(["../outside.py"]),
+    )
+    monkeypatch.setattr(workspace, "read_text", lambda relative: "outside\n")
+
+    with pytest.raises(PatchError, match="UNSAFE_TARGET"):
+        IsolatedWorkspace.create(workspace)
+
+
+def test_copy_rejects_total_size_over_limit(tmp_path):
+    host = tmp_path / "host"
+    host.mkdir()
+    (host / "app.py").write_text("value = 1\n", encoding="utf-8")
+    workspace = Workspace(RepositoryConfig(workspace=host, max_total_bytes=1))
+
+    with pytest.raises(PatchError, match="ISOLATION_TOO_LARGE"):
+        IsolatedWorkspace.create(workspace)
+    assert (host / "app.py").read_text(encoding="utf-8") == "value = 1\n"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits are not enforced on Windows.")
+def test_copy_preserves_executable_bit_without_special_bits(tmp_path):
+    host = tmp_path / "host"
+    host.mkdir()
+    script = host / "run.sh"
+    script.write_text("#!/bin/sh\necho ok\n", encoding="utf-8")
+    script.chmod(0o4755)
+    workspace = Workspace(RepositoryConfig(workspace=host))
+
+    isolated = IsolatedWorkspace.create(workspace)
+    try:
+        mode = stat.S_IMODE((isolated.root / "run.sh").stat().st_mode)
+        assert mode == 0o755
+        assert not mode & (stat.S_ISUID | stat.S_ISGID | stat.S_ISVTX)
+        assert stat.S_IMODE(script.stat().st_mode) == 0o4755
+    finally:
+        isolated.close()
+
