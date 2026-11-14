@@ -81,14 +81,51 @@ def test_supplied_path_length_and_small_budget_are_bounded(workspace):
         RepositoryMapper(workspace).build(max_chars=1)
 
 
-def test_ast_walk_stops_at_deadline(workspace):
+def test_map_deadline_is_reported_before_ast_worker(workspace):
     from unittest.mock import patch
 
     with patch("codepilot.context.repository_map.time.monotonic", side_effect=[0, 0, 10]):
         result = RepositoryMapper(workspace).build(["pkg/auth.py"])
     assert result.truncated
-    assert not result.modules[0].symbols
+    assert result.modules == []
     assert result.reasons == ["deadline"]
+
+
+@pytest.mark.parametrize(
+    "error,reason",
+    [
+        ("AST_TIMEOUT", "ast_timeout"),
+        ("AST_LIMITS_UNAVAILABLE", "ast_limits"),
+        ("AST_WORKER_FAILED", "ast_failure"),
+    ],
+)
+def test_ast_worker_errors_are_explicit(workspace, error, reason):
+    from codepilot.context.ast_worker import AstWorkerError
+
+    class FailingParser:
+        def parse(self, texts, timeout_seconds=None):
+            raise AstWorkerError(error)
+
+    result = RepositoryMapper(workspace, parser=FailingParser()).build(["pkg/auth.py"])
+    assert result.skipped == 1
+    assert result.incomplete
+    assert result.reasons == [reason]
+
+
+@pytest.mark.parametrize(
+    "status,reason",
+    [("resource", "ast_limits"), ("error", "ast_failure")],
+)
+def test_ast_worker_item_status_is_explicit(workspace, status, reason):
+    from codepilot.context.ast_worker import AstParseResult
+
+    class StatusParser:
+        def parse(self, texts, timeout_seconds=None):
+            return [AstParseResult(status)]
+
+    result = RepositoryMapper(workspace, parser=StatusParser()).build(["pkg/auth.py"])
+    assert result.skipped == 1
+    assert result.reasons == [reason]
 
 
 def test_only_exact_initializer_name_marks_package(workspace):

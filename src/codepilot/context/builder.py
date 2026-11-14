@@ -29,7 +29,7 @@ class RepositoryContext(BaseModel):
     repository_map: RepositoryMap
     sources: list[SourceExcerpt] = Field(default_factory=list)
     truncated: bool = False
-    reasons: list[OmissionReason] = Field(default_factory=list, max_length=15)
+    reasons: list[OmissionReason] = Field(default_factory=list, max_length=18)
     scan_skipped: int = 0
     skipped_sources: int = 0
     omitted_sources: int = 0

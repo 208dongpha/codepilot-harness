@@ -106,6 +106,9 @@ class RepositoryConfig(Section):
     max_symbols: int = Field(default=2000, ge=1, le=5000)
     max_search_results: int = Field(default=100, ge=1, le=1000)
     timeout_seconds: float = Field(default=5, gt=0, le=30)
+    ast_timeout_seconds: float = Field(default=10, gt=0, le=60)
+    ast_memory_mb: int = Field(default=256, ge=64, le=2048)
+    ast_cpu_seconds: int = Field(default=5, ge=1, le=60)
 
 
 class LoggingConfig(Section):

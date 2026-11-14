@@ -1,9 +1,15 @@
-import ast
 import time
 from typing import Literal
 
 from pydantic import BaseModel, Field, computed_field
 
+from codepilot.config import RepositoryConfig
+from codepilot.context.ast_worker import (
+    AstParseResult,
+    AstWorkerConfig,
+    AstWorkerError,
+    BoundedAstParser,
+)
 from codepilot.tools.base import ToolError
 from codepilot.tools.workspace import Workspace
 
@@ -23,6 +29,9 @@ OmissionReason = Literal[
     "invalid_reference",
     "source_window",
     "input_incomplete",
+    "ast_timeout",
+    "ast_limits",
+    "ast_failure",
 ]
 
 
@@ -45,7 +54,7 @@ class RepositoryMap(BaseModel):
     scan_skipped: int = 0
     syntax_errors: int = 0
     truncated: bool = False
-    reasons: list[OmissionReason] = Field(default_factory=list, max_length=15)
+    reasons: list[OmissionReason] = Field(default_factory=list, max_length=18)
 
     @computed_field
     @property
@@ -65,8 +74,20 @@ class RepositoryMap(BaseModel):
 
 
 class RepositoryMapper:
-    def __init__(self, workspace: Workspace):
+    def __init__(self, workspace: Workspace, parser: BoundedAstParser | None = None):
         self.workspace = workspace
+        self.parser = parser
+
+    def _use_parser(self, settings: RepositoryConfig) -> BoundedAstParser:
+        if self.parser is not None:
+            return self.parser
+        return BoundedAstParser(
+            AstWorkerConfig(
+                timeout_seconds=settings.ast_timeout_seconds,
+                memory_mb=settings.ast_memory_mb,
+                cpu_seconds=settings.ast_cpu_seconds,
+            )
+        )
 
     def build(self, paths: list[str] | None = None, max_chars: int | None = None) -> RepositoryMap:
         settings = self.workspace.config
@@ -87,8 +108,8 @@ class RepositoryMapper:
             if len(paths) > settings.max_files:
                 result.note("input_limit")
         deadline = time.monotonic() + settings.timeout_seconds
+        selected: list[tuple[str, str]] = []
         total_bytes = 0
-        symbol_count = 0
         for path in candidates:
             if not path.endswith(".py"):
                 continue
@@ -114,39 +135,54 @@ class RepositoryMapper:
             if total_bytes > settings.max_total_bytes:
                 result.note("byte_limit")
                 break
-            try:
-                tree = ast.parse(text)
-            except (SyntaxError, ValueError, RecursionError):
+            selected.append((normalized, text))
+
+        parsed: list[AstParseResult] = []
+        if selected:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                result.note("deadline")
+            else:
+                try:
+                    parsed = self._use_parser(settings).parse(
+                        [text for _, text in selected], timeout_seconds=remaining
+                    )
+                except AstWorkerError as exc:
+                    result.skipped += len(selected)
+                    result.note(
+                        {
+                            "AST_TIMEOUT": "ast_timeout",
+                            "AST_LIMITS_UNAVAILABLE": "ast_limits",
+                            "AST_INPUT_LIMIT": "input_incomplete",
+                        }.get(str(exc), "ast_failure")
+                    )
+
+        symbol_count = 0
+        for (normalized, _), item in zip(selected, parsed):
+            if item.status == "syntax":
                 result.syntax_errors += 1
                 result.note("syntax_error")
+                continue
+            if item.status != "ok":
+                result.skipped += 1
+                result.note("ast_limits" if item.status == "resource" else "ast_failure")
                 continue
             entry = ModuleEntry(
                 path=normalized, package=normalized.rsplit("/", 1)[-1] == "__init__.py"
             )
-            pending = [(tree, "")]
-            while pending:
-                if time.monotonic() >= deadline:
-                    result.note("deadline")
+            for symbol in item.symbols:
+                if symbol_count >= settings.max_symbols:
+                    result.note("symbol_limit")
                     break
-                node, scope = pending.pop()
-                if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
-                    name = f"{scope}.{node.name}" if scope else node.name
-                    if symbol_count >= settings.max_symbols:
-                        result.note("symbol_limit")
-                        break
-                    entry.symbols.append(
-                        Symbol(
-                            name=name,
-                            kind="class" if isinstance(node, ast.ClassDef) else "function",
-                            line=node.lineno,
-                            end_line=node.end_lineno or node.lineno,
-                        )
+                entry.symbols.append(
+                    Symbol(
+                        name=symbol.name,
+                        kind=symbol.kind,
+                        line=symbol.line,
+                        end_line=symbol.end_line,
                     )
-                    symbol_count += 1
-                    scope = name
-                pending.extend(
-                    (child, scope) for child in reversed(list(ast.iter_child_nodes(node)))
                 )
+                symbol_count += 1
             result.modules.append(entry)
             while len(result.model_dump_json()) > budget and entry.symbols:
                 entry.symbols.pop()
