@@ -59,7 +59,9 @@ def test_real_test_runner_runs_in_docker_with_security_limits(
                 "{{len .Mounts}}|{{json .HostConfig.CapDrop}}|"
                 "{{json .HostConfig.SecurityOpt}}|{{json .HostConfig.Binds}}|"
                 "{{json .HostConfig.Tmpfs}}|{{.HostConfig.NanoCpus}}|"
-                "{{.HostConfig.Memory}}|{{.HostConfig.PidsLimit}}|{{json .Config.Env}}"
+                "{{.HostConfig.Memory}}|{{.HostConfig.PidsLimit}}|"
+                "{{.HostConfig.MemorySwap}}|{{json .HostConfig.Ulimits}}|"
+                "{{json .Config.Env}}"
             )
             inspection = original_call(["inspect", "--format", template, name])
             observed.append((inspection.returncode, inspection.stdout.strip()))
@@ -93,10 +95,12 @@ def test_real_test_runner_runs_in_docker_with_security_limits(
     assert "no-new-privileges" in values[6]
     binds = json.loads(values[7])
     tmpfs = json.loads(values[8])
-    environment = json.loads(values[12])
+    environment = json.loads(values[14])
     assert values[9] == "1000000000"
     assert values[10] == "536870912"
     assert values[11] == "128"
+    assert values[12] == "536870912"
+    assert json.loads(values[13]) == [{"Name": "core", "Soft": 0, "Hard": 0}]
     assert f"{workspace.absolute()}:/workspace:rw" in binds
     assert "/tmp" in tmpfs
     assert "GEMINI_API_KEY" not in environment

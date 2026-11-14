@@ -17,6 +17,9 @@ from codepilot.config import SandboxConfig
 logger = logging.getLogger("codepilot")
 IMAGE = "codepilot-sandbox:phase1"
 SMOKE = "import os; assert os.getuid() != 0; print('codepilot-smoke-ok')"
+WORKSPACE_MEMORY = "512m"
+SMOKE_MEMORY = "256m"
+_CORE_LIMIT = "core=0:0"
 _READ_CHUNK = 8192
 
 
@@ -268,9 +271,13 @@ class DockerRuntime:
                     "--cpus",
                     "1",
                     "--memory",
-                    "512m",
+                    WORKSPACE_MEMORY,
+                    "--memory-swap",
+                    WORKSPACE_MEMORY,
                     "--pids-limit",
                     "128",
+                    "--ulimit",
+                    _CORE_LIMIT,
                     "--user",
                     _sandbox_user(),
                     "--cap-drop",
@@ -353,9 +360,13 @@ class DockerRuntime:
                     "--cpus",
                     "1",
                     "--memory",
-                    "256m",
+                    SMOKE_MEMORY,
+                    "--memory-swap",
+                    SMOKE_MEMORY,
                     "--pids-limit",
                     "64",
+                    "--ulimit",
+                    _CORE_LIMIT,
                     "--user",
                     "10001:10001",
                     "--cap-drop",

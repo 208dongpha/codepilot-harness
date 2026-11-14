@@ -45,7 +45,9 @@ def test_success_security_and_cleanup():
         ("--user", "10001:10001"),
         ("--cpus", "1"),
         ("--memory", "256m"),
+        ("--memory-swap", "256m"),
         ("--pids-limit", "64"),
+        ("--ulimit", "core=0:0"),
     ]:
         assert create[create.index(flag) + 1] == value
     assert create[create.index("--cap-drop") + 1] == "ALL"
@@ -251,7 +253,9 @@ def test_run_workspace_security_limits_and_cleanup(tmp_path):
         ("--network", "none"),
         ("--cpus", "1"),
         ("--memory", "512m"),
+        ("--memory-swap", "512m"),
         ("--pids-limit", "128"),
+        ("--ulimit", "core=0:0"),
         ("--workdir", "/workspace"),
         ("--volume", f"{workspace.absolute()}:/workspace:rw"),
         ("--tmpfs", "/tmp:rw,nosuid,nodev,size=64m"),
