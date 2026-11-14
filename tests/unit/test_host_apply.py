@@ -114,7 +114,7 @@ def test_multi_file_failure_rolls_back_every_change(env, monkeypatch):
 
     assert (host.root / "app.py").read_text(encoding="utf-8") == "value = 1\n"
     assert (host.root / "keep.txt").read_text(encoding="utf-8") == "keep\n"
-    assert not (host.root / "pkg").exists()
+    assert not (host.root / "pkg" / "new.py").exists()
     assert not list(host.root.rglob(".codepilot-apply-*"))
 
 

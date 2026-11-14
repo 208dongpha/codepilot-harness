@@ -236,3 +236,59 @@ def test_host_symlink_swap_is_rejected(tmp_path):
 
     assert outside.read_text(encoding="utf-8") == "outside\n"
     assert target.is_symlink()
+
+
+def test_rollback_parent_swap_does_not_remove_outside_directory(tmp_path, monkeypatch):
+    host_root = tmp_path / "host"
+    isolated_root = tmp_path / "isolated"
+    host_root.mkdir()
+    isolated_root.mkdir()
+    (host_root / "app.py").write_text("value = 1\n", encoding="utf-8")
+    (isolated_root / "app.py").write_text("value = 1\n", encoding="utf-8")
+    (host_root / "unrelated.txt").write_text("unrelated\n", encoding="utf-8")
+    config = RepositoryConfig(workspace=host_root, max_total_bytes=100000)
+    host = Workspace(config)
+    isolated = Workspace(config.model_copy(update={"workspace": isolated_root}))
+    applier = HostPatchApplier(host, isolated)
+    applier.begin_task()
+    baseline = WorkspaceSnapshot.capture(isolated, 100000)
+    (isolated_root / "aaa" / "sub").mkdir(parents=True)
+    (isolated_root / "aaa" / "sub" / "new.py").write_text("created\n", encoding="utf-8")
+    (isolated_root / "app.py").write_text("value = 2\n", encoding="utf-8")
+    authorized = {
+        "aaa/sub/new.py": digest("created\n"),
+        "app.py": digest("value = 2\n"),
+    }
+    diff = GitDiffVerifier(isolated, 100000).compare(baseline, authorized)
+    baseline_hashes = {
+        path: digest(content) for path, content in baseline.contents.items()
+    }
+    plan = applier.prepare(diff, baseline_hashes, authorized)
+    fail_second_write(applier, monkeypatch)
+    outside = tmp_path / "outside"
+    (outside / "sub").mkdir(parents=True)
+    swapped = False
+    original_rollback = applier._rollback
+
+    def rollback_after_swap(plan, backups):
+        nonlocal swapped
+        try:
+            os.rename(host_root / "aaa", host_root / "aaa-old")
+            (host_root / "aaa").symlink_to(outside, target_is_directory=True)
+            swapped = True
+        except OSError:
+            pass
+        return original_rollback(plan, backups)
+
+    monkeypatch.setattr(applier, "_rollback", rollback_after_swap)
+    applier.approve(plan.plan_id)
+
+    with pytest.raises(HostPatchError):
+        applier.apply(plan.plan_id)
+
+    assert (outside / "sub").is_dir()
+    assert list(outside.iterdir()) == [outside / "sub"]
+    assert (host.root / "app.py").read_text(encoding="utf-8") == "value = 1\n"
+    assert (host.root / "unrelated.txt").read_text(encoding="utf-8") == "unrelated\n"
+    if not swapped and os.name == "nt":
+        pytest.skip("Symlink creation is unavailable on this Windows host.")

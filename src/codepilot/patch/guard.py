@@ -222,11 +222,14 @@ class GuardedPath:
             for index, part in enumerate(self.parts[:-1]):
                 current = current / part
                 if not os.path.lexists(current):
+                    created_now = False
                     try:
                         os.mkdir(current)
+                        created_now = True
                     except FileExistsError:
                         pass
-                    self.created_dirs.append(self.root.joinpath(*self.parts[: index + 1]))
+                    if created_now:
+                        self.created_dirs.append(self.root.joinpath(*self.parts[: index + 1]))
                 self._handles.append(_windows_open_directory(current))
             self._parent = current
         except GuardError:

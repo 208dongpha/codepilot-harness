@@ -12,7 +12,6 @@ import stat
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
 from threading import Lock
 from typing import Literal
 
@@ -90,7 +89,6 @@ class HostPatchApplier:
         self._clock = clock
         self._snapshot: dict[str, str] | None = None
         self._pending: _PendingApply | None = None
-        self._created_dirs: list[Path] = []
         self._lock = Lock()
 
     @property
@@ -204,7 +202,6 @@ class HostPatchApplier:
                 if entry.content is not None and _sha256(entry.content) != entry.new_sha256:
                     raise HostPatchError("HOST_PLAN_TAMPERED")
             backups = self._recheck(plan)
-            self._created_dirs = []
             try:
                 self._commit(plan)
                 self._verify_applied(plan)
@@ -250,7 +247,6 @@ class HostPatchApplier:
     def _write_entry(self, entry: HostPatchEntry) -> None:
         try:
             with GuardedPath(self.host.root, safe_parts(entry.path)) as guard:
-                self._created_dirs.extend(guard.created_dirs)
                 if guard.sha256(self.host.config.max_file_bytes) != entry.expected_sha256:
                     raise HostPatchError("HOST_CONFLICT")
                 mode = 0o644 if entry.expected_sha256 is None else self._host_mode(entry.path)
@@ -267,7 +263,6 @@ class HostPatchApplier:
     def _delete_entry(self, entry: HostPatchEntry) -> None:
         try:
             with GuardedPath(self.host.root, safe_parts(entry.path)) as guard:
-                self._created_dirs.extend(guard.created_dirs)
                 if guard.sha256(self.host.config.max_file_bytes) != entry.expected_sha256:
                     raise HostPatchError("HOST_CONFLICT")
                 guard.unlink()
@@ -304,11 +299,9 @@ class HostPatchApplier:
                 continue
             if status == "conflict":
                 conflicts.append(entry.path)
-        for directory in reversed(self._created_dirs):
-            try:
-                directory.rmdir()
-            except OSError:
-                pass
+        # Created parent directories are intentionally left in place. Any pathname-based rmdir
+        # could follow a swapped parent symlink/junction and delete an outside directory; empty
+        # leftover directories are harmless.
         if failures:
             raise HostPatchError("HOST_ROLLBACK_FAILED") from None
         if conflicts:
@@ -318,7 +311,6 @@ class HostPatchApplier:
         self, entry: HostPatchEntry, backup: tuple[str, int] | None
     ) -> Literal["conflict"] | None:
         with GuardedPath(self.host.root, safe_parts(entry.path)) as guard:
-            self._created_dirs.extend(guard.created_dirs)
             current = guard.read_text(self.host.config.max_file_bytes)
             if entry.change == "added":
                 new_text = entry.content or ""
