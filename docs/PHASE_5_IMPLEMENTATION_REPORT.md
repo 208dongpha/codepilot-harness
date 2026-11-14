@@ -1,8 +1,9 @@
 # Báo cáo triển khai Phase 5 — Sandbox Hardening
 
 > **Phạm vi:** chỉ CP-022 đến CP-025, theo thứ tự và checkpoint đã duyệt ngày 2026-11-14.
-> **Trạng thái:** Đã triển khai xong CP-022–CP-025 và regression tests; Docker integration **BLOCKED**
-> vì daemon không khả dụng trong môi trường hiện tại; đang chờ security review độc lập.
+> **Trạng thái:** Đã triển khai xong CP-022–CP-025 và regression tests; đã xử lý finding HIGH
+> re-review về parent-swap TOCTOU trong host apply; Docker integration **BLOCKED** vì daemon không
+> khả dụng trong môi trường hiện tại; đang chờ security review độc lập.
 > **Phê duyệt phase:** Không tự khẳng định. Chỉ Project Owner được phê duyệt Phase 5.
 
 ## 1. Tóm tắt
@@ -115,6 +116,7 @@ Tạo mới:
 
 - `src/codepilot/context/ast_worker.py`
 - `src/codepilot/context/ast_worker_main.py`
+- `src/codepilot/patch/guard.py`
 - `src/codepilot/patch/host.py`
 - `tests/unit/test_ast_worker.py`
 - `tests/unit/test_host_apply.py`
@@ -145,8 +147,8 @@ Sửa:
 | Lệnh | Kết quả |
 |---|---|
 | `uv sync` | PASS — 41 packages resolved/checked |
-| `uv run pytest -q` | **312 passed, 15 skipped** |
-| `uv run pytest -q tests/security -rs` | **15 passed, 1 skipped** (Docker BLOCKED) |
+| `uv run pytest -q` | **316 passed, 15 skipped** |
+| `uv run pytest -q tests/security -rs` | **19 passed, 1 skipped** (Docker BLOCKED) |
 | `uv run pytest -q tests/integration -rs` | **13 skipped** — Docker daemon unavailable và ripgrep unavailable |
 | `uv run ruff check .` | PASS |
 | `git diff --check` | PASS (chỉ cảnh báo LF/CRLF của Git) |
@@ -166,7 +168,8 @@ security live check.
 - **Command injection:** command được `shlex.split` thành list và truyền trực tiếp cho Docker,
   không dùng shell; regression PASS.
 - **Unauthorized host writes:** Host chỉ đổi sau approval exact; mọi thay đổi ngoài snapshot bị
-  conflict; rollback regression PASS.
+  conflict; apply dùng directory-handle guard chống parent symlink/junction swap; rollback không
+  ghi đè external edit; regression PASS.
 - **Resource limits:** Docker flags được unit-test; AST worker dùng OS limits thực và parse thành
   công trong môi trường hiện tại.
 - **Docker runtime enforcement:** **BLOCKED** — không có bằng chứng chạy thật trong lần này; không
@@ -182,6 +185,7 @@ d4eb583 feat(context): run AST parsing in a bounded worker
 11427d4 feat(sandbox): cap swap and disable core dumps
 59b7625 feat(host): apply verified diffs with exact single-use approval
 6e384e9 test(security): cover phase 5 isolation and execution boundaries
+6c124be fix(host): prevent parent-swap escapes during patch apply
 ```
 
 Commit báo cáo này là commit follow-up. `sandbox-demo/` vẫn untracked và không được stage.
@@ -193,6 +197,9 @@ Commit báo cáo này là commit follow-up. `sandbox-demo/` vẫn untracked và 
 | Host không thay đổi trước approval | **PASS (unit)** | `test_prepare_is_side_effect_free...`, security host tests |
 | Approved patches được áp dụng | **PASS (unit)** | Modify/add/delete + nested directory; hash verified |
 | Patch conflicts bị từ chối | **PASS (unit)** | External edit, stale isolated baseline, symlink swap |
+| Parent-directory swap race | **PASS (unit)** | POSIX dir_fd, Windows no-delete directory handles; outside paths untouched |
+| Rollback không ghi đè external edit | **PASS (unit)** | Concurrent edit -> `HOST_ROLLBACK_CONFLICT`, file giữ nguyên |
+| Nền tảng không hỗ trợ guard | **PASS (unit)** | `HOST_UNSUPPORTED` trước mutation |
 | Dangerous commands bị chặn | **PASS (unit/architecture)** | List args, no shell, no host fallback; live Docker BLOCKED |
 | Secrets được bảo vệ | **PASS (unit)** | Excluded paths không đọc/copy; worker env tối thiểu |
 | Resource limits hoạt động | **PASS (unit/AST live)** / **BLOCKED (Docker runtime)** | Docker flags unit-tested; daemon unavailable |
@@ -209,9 +216,12 @@ Commit báo cáo này là commit follow-up. `sandbox-demo/` vẫn untracked và 
 2. **Host apply không atomic ở mức đa-file.** Rollback được thực hiện khi một bước lỗi, nhưng nếu
    process bị kill/power loss giữa apply, rollback có thể không chạy. Đây là giới hạn của filesystem
    API hiện tại; cần journal/checkpoint ở phase sau nếu muốn crash-consistency tuyệt đối.
-3. **TOCTOU còn lại.** Host recheck và `os.replace` không phải một transaction; local attacker có
-   quyền ghi có thể race trong khoảng ngắn. Mitigation: lstat/no-follow, hash recheck ngay trước
-   mutate, replace nguyên tử từng file.
+3. **TOCTOU còn lại ở final file.** Parent-directory swap đã được loại bỏ bằng handle/dir_fd
+   guard; tuy nhiên giữa lần đọc content cuối và `rename`/`replace`, một writer khác có thể thay
+   chính file đích. Không có portable compare-and-swap cho filesystem; rollback phát hiện content
+   khác và trả `HOST_ROLLBACK_CONFLICT` thay vì ghi đè, nhưng apply vẫn có thể thắng race hiếm này.
+   Mitigation: content check trong cùng guard ngay trước write, atomic rename, rollback conflict
+   detection.
 4. **Line ending:** Host apply ghi nội dung đã normalize LF (do `read_text` chuẩn hóa), nên file
    CRLF có thể đổi sang LF. Không ảnh hưởng verification hash nhưng có thể tạo diff lớn trên repo
    Windows.
@@ -241,6 +251,70 @@ Vui lòng review:
 5. `tests/security/` — coverage và các skip BLOCKED trung thực.
 6. Docker integration khi daemon khả dụng: chạy lại `tests/integration` và xác nhận network,
    memory/swap, pids, core=0, timeout, cleanup trước khi coi Phase 5 hoàn tất.
+
+## 12. Fix re-review — Host apply parent-swap TOCTOU
+
+### 12.1. Finding và phạm vi
+
+Reviewer xác nhận `_recheck()` chỉ validate bằng pathname; sau đó `_commit()`/`_write_entry()`
+resolve lại component và `mkstemp`/`os.replace` dùng path string. Một local writer có thể đổi
+parent directory thành symlink/reparse point trong cửa sổ validation-to-mutation và chuyển hướng
+ghi ra ngoài `host.root`. Rollback cũng có thể ghi đè external edit. Fix chỉ trong CP-024/CP-025.
+
+### 12.2. Thay đổi
+
+- Thêm `src/codepilot/patch/guard.py`:
+  - **POSIX:** mở directory chain bằng `os.open` với `O_DIRECTORY|O_NOFOLLOW`, giữ parent fd và
+    dùng `os.open/mkdir/unlink/rename(..., dir_fd=...)`; rename và ghi không phụ thuộc path string,
+    nên parent bị rename/replace cũng không chuyển hướng.
+  - **Windows:** mở handle cho mọi component bằng `CreateFileW` với
+    `FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT`, share mode không có
+    `FILE_SHARE_DELETE`, kiểm tra `FILE_ATTRIBUTE_DIRECTORY` và từ chối
+    `FILE_ATTRIBUTE_REPARSE_POINT`. Handle được giữ suốt mutation, nên rename/delete parent bị OS
+    chặn; reparse/junction bị từ chối. `os.replace` chỉ thay entry cuối, không follow symlink;
+    read/write mở target với `FILE_FLAG_OPEN_REPARSE_POINT`.
+  - Nền tảng khác hoặc thiếu `dir_fd` support: `GuardUnsupported` -> host apply fail closed
+    `HOST_UNSUPPORTED` trước mutation.
+- `HostPatchApplier._write_entry`, `_delete_entry`, `_verify_applied`, `_restore_entry` dùng guard
+  thay cho `_prepare_target`/`_atomic_write` path-based.
+- Trước write, recheck content hash **trong cùng guard** đang giữ handle; sau write verify hash
+  qua guard mới.
+- Rollback đọc current content trước khi restore:
+  - Chỉ restore khi current đúng bằng content đã ghi (hoặc đã bằng bản gốc).
+  - External edit/delete -> không ghi đè, trả `HOST_ROLLBACK_CONFLICT`.
+  - Guard/IO failure -> `HOST_ROLLBACK_FAILED`.
+  - Parent swap trong rollback không ghi ra ngoài root.
+
+### 12.3. Regression tests
+
+- `test_parent_swap_after_validation_cannot_redirect_write`: rename parent + tạo symlink trong
+  `GuardedPath.write`, sau validation và trước mutation; assert file ngoài root giữ nguyên, file
+  unrelated giữ nguyên, nội dung apply nằm trong thư mục gốc (POSIX) hoặc apply fail closed an toàn.
+- `test_rollback_does_not_overwrite_concurrent_edit`: external edit file đã ghi trong lúc rollback
+  -> `HOST_ROLLBACK_CONFLICT`, external content giữ nguyên, entry còn lại được restore.
+- `test_rollback_parent_swap_cannot_escape`: swap parent ngay trước rollback; assert outside path
+  và unrelated file không đổi, lỗi recovery được báo chính xác.
+- `test_unsupported_platform_fails_before_host_mutation`: guard unsupported -> `HOST_UNSUPPORTED`,
+  Host giữ nguyên.
+
+### 12.4. Bằng chứng
+
+- Focused host/security tests: **14 passed** (7 unit + 7 security) sau fix.
+- Full suite: `uv run pytest -q` -> **316 passed, 15 skipped**.
+- Security suite: `tests/security` -> **19 passed, 1 skipped** (Docker BLOCKED).
+- `uv run ruff check .` -> PASS; `git diff --check` -> PASS.
+- Docker vẫn **BLOCKED**; không start/stop Docker Desktop, không Host execution fallback.
+- Commit fix: `6c124be fix(host): prevent parent-swap escapes during patch apply`.
+
+### 12.5. Giới hạn
+
+- Final-file race giữa content check và rename vẫn tồn tại như mục 10.3; không có portable CAS.
+  Parent-directory escape đã được loại bỏ trên POSIX và Windows local NTFS.
+- Windows guarantee phụ thuộc NTFS/OS cho phép mở directory handle không share delete; nếu môi
+  trường chặn (policy/FS khác), guard fail closed `HOST_UNSUPPORTED`/`HOST_ROLLBACK_FAILED`.
+- Multi-file crash consistency vẫn là rollback, không phải journal; process kill giữa apply có
+  thể không rollback.
+- Phase 5 acceptance vẫn **PENDING**.
 
 Triển khai dừng tại đây để security review. Không bắt đầu Phase 6, không merge, không tự khẳng
 định Phase 5 đã được phê duyệt.
