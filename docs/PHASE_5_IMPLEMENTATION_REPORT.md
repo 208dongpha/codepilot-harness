@@ -147,8 +147,8 @@ Sửa:
 | Lệnh | Kết quả |
 |---|---|
 | `uv sync` | PASS — 41 packages resolved/checked |
-| `uv run pytest -q` | **316 passed, 15 skipped** |
-| `uv run pytest -q tests/security -rs` | **19 passed, 1 skipped** (Docker BLOCKED) |
+| `uv run pytest -q` | **318 passed, 15 skipped** |
+| `uv run pytest -q tests/security -rs` | **20 passed, 1 skipped** (Docker BLOCKED) |
 | `uv run pytest -q tests/integration -rs` | **13 skipped** — Docker daemon unavailable và ripgrep unavailable |
 | `uv run ruff check .` | PASS |
 | `git diff --check` | PASS (chỉ cảnh báo LF/CRLF của Git) |
@@ -186,6 +186,7 @@ d4eb583 feat(context): run AST parsing in a bounded worker
 59b7625 feat(host): apply verified diffs with exact single-use approval
 6e384e9 test(security): cover phase 5 isolation and execution boundaries
 6c124be fix(host): prevent parent-swap escapes during patch apply
+0055a71 fix(host): leave created directories instead of unsafe rollback rmdir
 ```
 
 Commit báo cáo này là commit follow-up. `sandbox-demo/` vẫn untracked và không được stage.
@@ -198,6 +199,7 @@ Commit báo cáo này là commit follow-up. `sandbox-demo/` vẫn untracked và 
 | Approved patches được áp dụng | **PASS (unit)** | Modify/add/delete + nested directory; hash verified |
 | Patch conflicts bị từ chối | **PASS (unit)** | External edit, stale isolated baseline, symlink swap |
 | Parent-directory swap race | **PASS (unit)** | POSIX dir_fd, Windows no-delete directory handles; outside paths untouched |
+| Rollback dọn directory race | **PASS (unit)** | Không dùng pathname rmdir; empty dirs được giữ lại, outside tree untouched |
 | Rollback không ghi đè external edit | **PASS (unit)** | Concurrent edit -> `HOST_ROLLBACK_CONFLICT`, file giữ nguyên |
 | Nền tảng không hỗ trợ guard | **PASS (unit)** | `HOST_UNSUPPORTED` trước mutation |
 | Dangerous commands bị chặn | **PASS (unit/architecture)** | List args, no shell, no host fallback; live Docker BLOCKED |
@@ -214,8 +216,10 @@ Commit báo cáo này là commit follow-up. `sandbox-demo/` vẫn untracked và 
    memory/CPU limits, timeout, cleanup, image) là **BLOCKED**; unit tests chỉ chứng minh cấu hình
    flag, không chứng minh runtime enforcement. Không start/stop Docker Desktop theo yêu cầu.
 2. **Host apply không atomic ở mức đa-file.** Rollback được thực hiện khi một bước lỗi, nhưng nếu
-   process bị kill/power loss giữa apply, rollback có thể không chạy. Đây là giới hạn của filesystem
-   API hiện tại; cần journal/checkpoint ở phase sau nếu muốn crash-consistency tuyệt đối.
+   process bị kill/power loss giữa apply, rollback có thể không chạy. Created parent directories
+   được giữ lại sau rollback thay vì rmdir pathname, để tránh parent-swap escape; empty directories
+   còn lại là side effect chấp nhận được. Đây là giới hạn của filesystem API hiện tại; cần
+   journal/checkpoint ở phase sau nếu muốn crash-consistency tuyệt đối.
 3. **TOCTOU còn lại ở final file.** Parent-directory swap đã được loại bỏ bằng handle/dir_fd
    guard; tuy nhiên giữa lần đọc content cuối và `rename`/`replace`, một writer khác có thể thay
    chính file đích. Không có portable compare-and-swap cho filesystem; rollback phát hiện content
@@ -299,9 +303,9 @@ ghi ra ngoài `host.root`. Rollback cũng có thể ghi đè external edit. Fix 
 
 ### 12.4. Bằng chứng
 
-- Focused host/security tests: **14 passed** (7 unit + 7 security) sau fix.
-- Full suite: `uv run pytest -q` -> **316 passed, 15 skipped**.
-- Security suite: `tests/security` -> **19 passed, 1 skipped** (Docker BLOCKED).
+- Focused host/guard/security tests: **16 passed** (7 unit host + 1 guard + 8 security) sau fix.
+- Full suite: `uv run pytest -q` -> **318 passed, 15 skipped**.
+- Security suite: `tests/security` -> **20 passed, 1 skipped** (Docker BLOCKED).
 - `uv run ruff check .` -> PASS; `git diff --check` -> PASS.
 - Docker vẫn **BLOCKED**; không start/stop Docker Desktop, không Host execution fallback.
 - Commit fix: `6c124be fix(host): prevent parent-swap escapes during patch apply`.
@@ -315,6 +319,30 @@ ghi ra ngoài `host.root`. Rollback cũng có thể ghi đè external edit. Fix 
 - Multi-file crash consistency vẫn là rollback, không phải journal; process kill giữa apply có
   thể không rollback.
 - Phase 5 acceptance vẫn **PENDING**.
+
+### 12.6. Re-review vòng 2 — rollback rmdir race và directory ownership
+
+**Finding:** `HostPatchApplier._rollback` vẫn dọn các directory đã tạo bằng `Path.rmdir()` dựa
+trên pathname. Nếu một nested parent mới tạo bị rename và thay bằng symlink trỏ ra ngoài trước
+cleanup, `rmdir` có thể đi theo parent symlink và xóa một empty child directory bên ngoài
+`host.root`. Đồng thời `GuardedPath._open_windows` ghi `created_dirs` cả khi `os.mkdir` ném
+`FileExistsError`, tức có thể nhận directory do writer khác tạo.
+
+- Fix rollback: **không dùng pathname rmdir nữa**. Created parent directories được giữ lại; đây là
+  thay đổi không thể ảnh hưởng file content ngoài `host.root`. Leftover empty directories là
+  side effect nhỏ, được ghi nhận là giới hạn có chủ đích thay vì mở lại đường escape.
+- Fix Windows ownership: chỉ append `created_dirs` khi `os.mkdir` thực sự thành công; trường hợp
+  `FileExistsError` không claim directory của writer khác.
+- Regression tests:
+  - `test_rollback_parent_swap_does_not_remove_outside_directory`: plan tạo `aaa/sub/new.py`, lỗi
+    entry thứ hai kích hoạt rollback; trước rollback `aaa` bị rename và thay bằng symlink tới
+    `outside` có empty `outside/sub`; assert `outside/sub` còn nguyên, file ngoài và unrelated file
+    không đổi.
+  - `test_windows_guard_does_not_claim_an_existing_directory`: mô phỏng writer khác tạo directory
+    giữa `lexists` và `mkdir`; assert `created_dirs == []`.
+- Evidence: focused 16 passed; full **318 passed, 15 skipped**; security **20 passed, 1 skipped**;
+  Ruff PASS; diff-check PASS; Docker **BLOCKED**.
+- Commit fix: `0055a71 fix(host): leave created directories instead of unsafe rollback rmdir`.
 
 Triển khai dừng tại đây để security review. Không bắt đầu Phase 6, không merge, không tự khẳng
 định Phase 5 đã được phê duyệt.
